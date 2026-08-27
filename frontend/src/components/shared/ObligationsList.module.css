@@ -1,0 +1,102 @@
+.wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.mainLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.subject {
+  font-weight: 600;
+  color: var(--navy-900);
+}
+
+.dash {
+  color: var(--gray-400);
+}
+
+.action {
+  color: var(--gray-800);
+}
+
+.objectText {
+  color: var(--gray-600);
+}
+
+.metaLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.metaLine:empty {
+  display: none;
+}
+
+.categoryChip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.deadlineChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--gold-50);
+  border: 1px solid var(--gold-300);
+  color: var(--navy-800);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.deadlineBlock {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.deadlineHeader {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+  margin-bottom: 8px;
+}
+
+.deadlineChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.emptyNote {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gray-500);
+}

@@ -1,0 +1,27 @@
+# Dependabot is configured ALERT-ONLY: open-pull-requests-limit: 0 means it
+# still scans dependencies and reports advisories in the repo's Security tab,
+# but never opens version-bump PRs or branches (this repo works from a single
+# master branch; dependency bumps are made deliberately with the audit tooling
+# in CI — pip-audit / npm audit / Trivy — which fail the build on known vulns).
+version: 2
+updates:
+  # Python backend dependencies
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+
+  # Frontend (npm) dependencies
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0

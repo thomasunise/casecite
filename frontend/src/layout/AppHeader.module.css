@@ -1,0 +1,156 @@
+/* AppHeader styles */
+
+.skipLink {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  background: var(--blue-600);
+  color: white;
+  padding: 8px 16px;
+  z-index: 1000;
+  font-size: 14px;
+  text-decoration: none;
+  border-radius: 0 0 4px 0;
+  transition: top 0.15s;
+}
+
+.skipLink:focus {
+  top: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: white;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.headerLeft {
+}
+
+.headerTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-bottom: 4px;
+}
+
+.headerBadges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--gray-600);
+  background: var(--gray-100);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.badgeHealthy {
+  background: var(--green-100);
+  color: var(--green-700);
+}
+
+.badgeUnhealthy {
+  background: var(--amber-100);
+  color: var(--amber-700);
+}
+
+.badgeGreen {
+  background: var(--green-100);
+  color: var(--green-600);
+}
+
+.statusDotBase {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.statusDotHealthy {
+  background: var(--green-500);
+}
+
+.statusDotUnhealthy {
+  background: var(--amber-500);
+}
+
+.headerRight {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.headerBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-700);
+  cursor: pointer;
+}
+
+.headerBtnPrimary {
+  background: var(--navy-800);
+  color: var(--on-secondary);
+}
+
+.userMenu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: var(--gray-100);
+  border-radius: 8px;
+  margin-left: 8px;
+}
+
+.userAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--navy-700);
+  color: var(--on-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.userName {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-700);
+}
+
+.logoutBtn {
+  padding: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: var(--gray-500);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.authButtons {
+  display: flex;
+  gap: 8px;
+}

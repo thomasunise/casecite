@@ -1,0 +1,482 @@
+/* RagDocsView styles */
+
+.container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--gray-50);
+  overflow: auto;
+}
+
+.content {
+  padding: 24px 32px;
+}
+
+.headerRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--navy-800);
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin-top: 4px;
+}
+
+.refreshBtn {
+  padding: 8px 16px;
+  background: var(--navy-700);
+  color: var(--on-secondary);
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.refreshBtnDisabled {
+  opacity: 0.7;
+}
+
+.sourcesSection {
+  margin-bottom: 24px;
+}
+
+.sourcesToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--gray-500);
+}
+
+.sourcesChevron {
+  color: var(--gray-400, #9ca3af);
+}
+
+.sourcesLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gray-500);
+}
+
+.sourceGroupHeading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy-700, #334155);
+  margin: 16px 0 8px;
+}
+
+.sourcesGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.sourceCardStatic {
+  cursor: default;
+}
+
+.sourceCardStatic:hover {
+  border-color: var(--gray-200);
+  box-shadow: none;
+}
+
+.sourceDesc {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.privateBadge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--navy-700, #334155);
+  background: var(--gray-100, #f1f5f9);
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.sourcesNote {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin: 14px 0 0;
+  line-height: 1.5;
+}
+
+.sourceCard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.sourceCard:hover {
+  border-color: var(--navy-300, #94a3b8);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.sourceIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sourceInfo {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.sourceName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-800);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sourceStatus {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+.sourceConnected {
+  color: #10b981;
+  flex-shrink: 0;
+}
+
+.sourceAdd {
+  color: var(--gray-400, #9ca3af);
+  flex-shrink: 0;
+}
+
+.searchWrapper {
+  margin-bottom: 20px;
+}
+
+.searchInput {
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  font-size: 14px;
+  outline: none;
+  background: white;
+}
+
+.loadingState {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--gray-400);
+}
+
+.emptyState {
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--gray-400);
+}
+
+.emptyTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.emptyText {
+  font-size: 13px;
+}
+
+.docsList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.docCard {
+  padding: 14px 18px;
+  background: white;
+  border-radius: 10px;
+  border: 1px solid var(--gray-200);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.docIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--blue-50);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.docIconError {
+  background: var(--red-50, #fef2f2);
+}
+
+.docDetails {
+  flex: 1;
+  min-width: 0;
+}
+
+.docFilename {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-800);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docMetaText {
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+.docMetaError {
+  color: var(--red-500, #ef4444);
+}
+
+.deleteBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  color: var(--gray-400);
+  flex-shrink: 0;
+  transition: color 0.15s, background 0.15s;
+}
+
+.deleteBtn:hover {
+  color: var(--red-500, #ef4444);
+  background: var(--red-50, #fef2f2);
+}
+
+.deleteBtnDisabled {
+  opacity: 0.5;
+}
+
+/* ===== Icon States ===== */
+.spinnerIcon {
+  animation: spin 1s linear infinite;
+}
+
+.loadingSpinner {
+  animation: spin 1s linear infinite;
+  margin-bottom: 12px;
+}
+
+.emptyIcon {
+  color: var(--gray-300);
+  margin-bottom: 12px;
+}
+
+.docIconColorDefault {
+  color: var(--blue-500);
+}
+
+.docIconColorError {
+  color: var(--red-500, #ef4444);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ==================== Library: folders + files ==================== */
+
+.libraryHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 4px 0 12px;
+}
+
+.newFolderBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy-700, #334155);
+  background: var(--gray-100, #f1f5f9);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.newFolderBtn:hover { background: var(--gray-200, #e2e8f0); }
+
+.newFolderRow { display: flex; align-items: center; gap: 6px; }
+
+.newFolderInput {
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--gray-300, #cbd5e1);
+  border-radius: 8px;
+  outline: none;
+}
+
+.newFolderConfirm {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-secondary);
+  background: var(--navy-700, #334155);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.newFolderCancel {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--gray-500);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.library { display: flex; flex-direction: column; gap: 8px; }
+
+.folder {
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  background: white;
+  overflow: hidden;
+}
+
+.folderDragOver {
+  border-color: var(--navy-700, #334155);
+  box-shadow: 0 0 0 2px rgba(51, 65, 85, 0.15);
+}
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px 4px 4px;
+}
+
+.folderToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  padding: 8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.folderChevron { color: var(--gray-400, #9ca3af); flex-shrink: 0; }
+.folderIcon { color: var(--navy-700, #334155); flex-shrink: 0; }
+
+.folderName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-800);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.folderCount {
+  font-size: 11px;
+  color: var(--gray-500);
+  background: var(--gray-100, #f1f5f9);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.folderDelete {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--gray-400, #9ca3af);
+  background: none;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.folderDelete:hover { color: #ef4444; background: var(--gray-100, #f1f5f9); }
+
+.folderDocs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 12px 30px;
+}
+
+.folderEmpty {
+  font-size: 12px;
+  color: var(--gray-400, #9ca3af);
+  padding: 8px 0;
+  font-style: italic;
+}
+
+.generalSection {
+  margin-top: 8px;
+  border: 1px dashed var(--gray-200);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.generalHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.docCard[draggable='true'] { cursor: grab; }

@@ -1,0 +1,35 @@
+# Coolify Webhook Deploy
+#
+# Triggers after the CI pipeline pushes a new image to GHCR.
+# Coolify pulls the latest image automatically when it receives the webhook.
+#
+# Setup:
+#   1. Copy this file to .github/workflows/deploy-coolify-webhook.yml
+#   2. In Coolify: open your resource → Settings → copy the Webhook URL
+#   3. In GitHub: Settings → Secrets → add COOLIFY_WEBHOOK_URL
+#
+# Required GitHub Secrets:
+#   COOLIFY_WEBHOOK_URL — the deploy webhook from Coolify resource settings
+
+name: Deploy to Coolify
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+    branches: [master, main]
+
+jobs:
+  deploy:
+    name: Trigger Coolify Deploy
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Trigger Coolify webhook
+        run: |
+          curl -fsSL "${{ secrets.COOLIFY_WEBHOOK_URL }}" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5
+          echo "Coolify deploy triggered successfully"

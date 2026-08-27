@@ -1,0 +1,564 @@
+/* DraftingView — drafting-first workspace. House card style; the canvas/
+   document is the page, the composer floats beneath, rectangle family. */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--gray-100);
+  position: relative;
+}
+
+.scrollArea {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 20px 180px;
+}
+
+/* The notice under the drafted document shares its reading column */
+.draftNotice {
+  max-width: 860px;
+  margin: -6px auto 0;
+  padding: 0 4px 8px;
+  border-top: 0;
+}
+
+.hiddenInput { display: none; }
+
+/* ── Reference documents card ── */
+.refCard {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 860px;
+  margin: 0 auto 14px;
+  padding: 12px 16px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+}
+
+.refLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  margin-right: 4px;
+}
+
+.refChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  font-size: 12.5px;
+  color: var(--navy-800);
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  max-width: 280px;
+}
+
+.refName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.refClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.refClear:hover { background: var(--gray-200); color: var(--gray-700); }
+
+.attachBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px dashed var(--gray-300);
+  border-radius: 8px;
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+.attachBtn:hover:not(:disabled) { border-color: var(--navy-700); color: var(--navy-800); }
+.attachBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Canvas (pre-draft page) ── */
+.canvas {
+  max-width: 860px;
+  margin: 0 auto;
+  min-height: 440px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.canvasBody {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  max-width: 460px;
+  padding: 40px 24px;
+}
+
+.canvasIcon { color: var(--navy-700); }
+
+.canvasTitle {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin: 0;
+}
+
+.canvasText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-500);
+  margin: 0;
+}
+
+/* ── Conversation bubbles (inside the shared dock) ── */
+.messageRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.messageRowUser {
+  composes: messageRow;
+  justify-content: flex-end;
+}
+
+.assistantAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--navy-800);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold-400);
+  flex-shrink: 0;
+}
+
+.userBubble {
+  max-width: 720px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  margin-left: auto;
+}
+
+.assistantBubble {
+  max-width: 720px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: white;
+  border: 1px solid var(--gray-200);
+}
+
+.processingBubble {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.userText {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.dockOffsets {
+  --dock-bottom: 120px;
+  --dock-bottom-low: 40px;
+}
+
+/* ── Composer — canonical rectangle family ── */
+.inputSection {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 20px 8px;
+}
+
+.inputWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 720px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 5px 6px 5px 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+.inputWrap:focus-within { border-color: var(--navy-700); }
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--gray-800);
+  outline: none;
+  padding: 8px 0;
+}
+
+.sendBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 8px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.sendBtnDisabled { opacity: 0.4; cursor: default; }
+
+.inputHints {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--gray-400);
+}
+
+.kbd {
+  display: inline-block;
+  padding: 2px 5px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.composerCollapseBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+}
+.composerCollapseBtn:hover { color: var(--gray-600); }
+
+.composerToggle {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 8px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.spin { animation: draftSpin 1s linear infinite; }
+@keyframes draftSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+/* ── Target length (long-document pipeline) ── */
+.lengthControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--gray-500);
+  border-left: 1px solid var(--gray-200);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.lengthInput {
+  width: 48px;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: center;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  background: var(--gray-50);
+  color: var(--gray-800);
+  outline: none;
+}
+.lengthInput:focus { border-color: var(--navy-700); }
+.lengthInput::placeholder { color: var(--gray-400); }
+
+/* ── Section plan (reviewed before a long draft is written) ── */
+.planCard {
+  max-width: 860px;
+  margin: 0 auto;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  padding: 18px 20px 16px;
+}
+
+.planHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--gray-200);
+  margin-bottom: 8px;
+}
+
+.planHeaderText {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.planTitleInput {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--navy-900);
+  border: none;
+  border-bottom: 1px dashed transparent;
+  background: transparent;
+  padding: 2px 0;
+  outline: none;
+  width: 100%;
+}
+.planTitleInput:hover, .planTitleInput:focus { border-bottom-color: var(--gray-300); }
+
+.planMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 11.5px;
+  color: var(--gray-500);
+}
+
+.planSections {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.planSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+.planSection:last-child { border-bottom: none; }
+
+.planSectionHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.planNum {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--navy-800);
+  width: 26px;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.planInput {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--navy-900);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 5px 8px;
+  outline: none;
+}
+.planInput:hover { border-color: var(--gray-200); }
+.planInput:focus { border-color: var(--navy-700); background: white; }
+
+.planWords {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--gray-500);
+  flex-shrink: 0;
+}
+.planWords input {
+  width: 64px;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: right;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  background: var(--gray-50);
+  color: var(--gray-800);
+  outline: none;
+}
+.planWords input:focus { border-color: var(--navy-700); }
+
+.planIconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.planIconBtn:hover:not(:disabled) { background: var(--gray-100); color: var(--gray-700); }
+.planIconBtn:disabled { opacity: 0.35; cursor: default; }
+
+.planTextarea {
+  width: 100%;
+  margin-left: 34px;
+  max-width: calc(100% - 34px);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--gray-800);
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  background: var(--gray-50);
+  padding: 6px 8px;
+  resize: vertical;
+  outline: none;
+}
+.planTextarea:focus { border-color: var(--navy-700); background: white; }
+.planTextareaMuted { color: var(--gray-500); font-size: 12px; }
+
+.planExtrasToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  padding: 6px 0;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  background: transparent;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+.planExtrasToggle:hover { color: var(--navy-800); }
+
+.planExtras {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0 8px;
+}
+.planExtras .planTextarea { margin-left: 0; max-width: 100%; }
+
+.planExtraLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+}
+
+.planFooter {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 14px;
+  margin-top: 6px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.planGenerate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: 8px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  cursor: pointer;
+}
+.planGenerate:hover { background: var(--navy-900); }
+
+.planDiscard {
+  padding: 9px 12px;
+  font-size: 12.5px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+.planDiscard:hover { border-color: var(--gray-300); color: var(--gray-800); }

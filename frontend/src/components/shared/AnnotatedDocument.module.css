@@ -1,0 +1,93 @@
+.doc {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--gray-800);
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.mark {
+  position: relative;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 1px 0;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.markVerified {
+  background: rgba(34, 197, 94, 0.18);
+  border-bottom: 2px solid var(--green-500);
+}
+.markUnverified {
+  background: rgba(245, 158, 11, 0.18);
+  border-bottom: 2px solid var(--amber-500);
+}
+.mark:hover { background: rgba(212, 196, 168, 0.45); }
+
+/* Hover card */
+.popover {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 50;
+  width: 340px;
+  margin-top: 6px;
+  padding: 10px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  font-family: 'Inter', system-ui, sans-serif;
+  white-space: normal;
+  flex-direction: column;
+  gap: 10px;
+}
+.mark:hover .popover,
+.popover:hover {
+  display: flex;
+}
+
+.cite {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--gray-100);
+}
+.cite:last-child { border-bottom: none; padding-bottom: 0; }
+.citeTop { display: flex; align-items: center; gap: 6px; }
+.badgeV, .badgeU {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px;
+}
+.badgeV { background: var(--green-100); color: var(--green-700); }
+.badgeU { background: var(--amber-100); color: var(--amber-800); }
+.src { font-size: 10px; padding: 2px 7px; border-radius: 999px; background: var(--gray-100); color: var(--gray-600); }
+.citeName { font-size: 13px; font-weight: 700; color: var(--navy-900); }
+.citeRef { font-size: 11px; color: var(--gray-500); }
+.citeQuote {
+  font-size: 12px; line-height: 1.5; color: var(--gray-700);
+  background: var(--gray-50); border-radius: 6px; padding: 6px 8px; margin-top: 2px;
+}
+.openBtn {
+  align-self: flex-start;
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 4px; padding: 5px 9px;
+  border: 1px solid var(--gray-300); border-radius: 7px;
+  background: white; color: var(--navy-900); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.openBtn:hover { background: var(--gray-50); }
+
+/* Citation tracing: the landed-on span flashes to draw the eye */
+.markFlash {
+  animation: annFlash 1.8s ease;
+}
+
+@keyframes annFlash {
+  0%, 40% { box-shadow: 0 0 0 3px var(--navy-800); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}

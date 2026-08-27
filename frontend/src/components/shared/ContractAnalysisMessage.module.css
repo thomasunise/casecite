@@ -1,0 +1,177 @@
+/* ContractAnalysisMessage — a full analysis rendered inside an assistant
+   chat bubble. House card style: hairline dividers, uppercase micro-labels,
+   navy data marks. The bubble itself provides the white card surface. */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== Header ===== */
+.header {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-bottom: 14px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.headText {
+  flex: 1;
+  min-width: 220px;
+}
+
+.overline {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-700);
+  margin: 0 0 6px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--navy-900);
+  margin: 0;
+}
+
+.titleMeta {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-500);
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-top: 6px;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.riskBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.riskHigh {
+  background: var(--red-50);
+  color: var(--red-600);
+}
+
+.riskMedium {
+  background: var(--amber-50);
+  color: var(--amber-600);
+}
+
+.riskLow {
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.exportBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  background: white;
+  color: var(--gray-700);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.exportBtn:hover:not(:disabled) {
+  background: var(--gray-50);
+}
+
+.exportBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Sections ===== */
+.section {
+  margin-bottom: 20px;
+}
+
+.section:last-child {
+  margin-bottom: 0;
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  margin: 0 0 10px;
+}
+
+.sectionTitle::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--gray-200);
+}
+
+.summaryText {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--gray-900);
+  white-space: pre-wrap;
+}
+
+.emptyNote {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+/* ===== Issues ===== */
+.issueGroup {
+  margin-bottom: 14px;
+}
+
+.issueGroup:last-child {
+  margin-bottom: 0;
+}
+
+.issueGroupLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+  margin-bottom: 6px;
+}
+
+.issueGroupList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

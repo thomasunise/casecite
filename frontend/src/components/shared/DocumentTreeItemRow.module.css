@@ -1,0 +1,5 @@
+/* DocumentTreeItemRow — local styles */
+
+.treeItemIndent {
+  padding-left: calc(12px + var(--depth-indent, 0px));
+}

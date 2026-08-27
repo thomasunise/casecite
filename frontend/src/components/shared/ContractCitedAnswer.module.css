@@ -1,0 +1,103 @@
+/* ContractCitedAnswer — answer text + grounded quote blocks.
+   Quote styling matches ContractIssueCard's grounded quote (gold left border). */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.answerText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-800);
+}
+
+.answerLine {
+  margin: 0 0 6px;
+}
+
+.answerLine:last-child {
+  margin-bottom: 0;
+}
+
+.lineSpacer {
+  height: 8px;
+}
+
+/* ===== Citations ===== */
+.citationsBlock {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gray-100);
+}
+
+.citationsHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 8px;
+}
+
+.citationsHint {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--gray-400);
+  font-size: 10px;
+}
+
+.citationsList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.citationChip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.citationMarker {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--navy-700);
+  line-height: 1.6;
+  padding-top: 6px;
+}
+
+.quote,
+.quoteExpanded {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--gold-600);
+  background: var(--gray-50);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  font-style: italic;
+  color: var(--gray-700);
+}
+
+.quote {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.citationChip:hover .quote,
+.citationChip:hover .quoteExpanded {
+  background: var(--gray-100);
+}

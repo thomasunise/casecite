@@ -1,0 +1,6 @@
+# Shell scripts and proxy configs must always check out with LF line endings.
+# A CRLF start.sh baked into the Docker image breaks the container entrypoint
+# on Windows clones with core.autocrlf=true.
+*.sh text eol=lf
+Caddyfile text eol=lf
+*.conf text eol=lf

@@ -1,0 +1,56 @@
+# Coolify Docker Compose - SSL handled by Coolify/Traefik automatically
+# One unified image (root Dockerfile): nginx serves the built frontend on :80
+# and proxies /api/* to uvicorn in the same container.
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # Real (fail-closed) production posture: DEBUG is off, so every secret
+      # and backing service below must be set or the app refuses to start.
+      # For local development use docker-compose.dev.yml (DEBUG=true).
+      # --- Required in production (startup fails closed if unset) ---
+      # Generate secrets with: openssl rand -hex 32  (salt: openssl rand -hex 16)
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY is required (openssl rand -hex 32)}
+      - ENCRYPTION_SALT=${ENCRYPTION_SALT:?ENCRYPTION_SALT is required (openssl rand -hex 16)}
+      - AUDIT_HMAC_KEY=${AUDIT_HMAC_KEY:?AUDIT_HMAC_KEY is required (openssl rand -hex 32)}
+      - DATABASE_URL=${DATABASE_URL:?DATABASE_URL is required (postgresql+asyncpg://...)}
+      - REDIS_URL=${REDIS_URL:?REDIS_URL is required (redis://host:6379/0)}
+      - CORS_ORIGINS=${CORS_ORIGINS:?CORS_ORIGINS is required (https://app.example.com)}
+      # Required: the public hostname(s) this instance serves. Without it
+      # TrustedHost falls back to localhost-only and 400s every real request.
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:?ALLOWED_HOSTS is required (comma-separated hostnames, e.g. app.example.com)}
+      # Confirm the data volume is encrypted at rest (LUKS/BitLocker/FileVault or
+      # provider disk encryption). Derived privileged text (vector chunks,
+      # extracted clauses, chat history) is stored in cleartext; the app refuses
+      # to start until you acknowledge FDE is enabled on this volume.
+      - DISK_ENCRYPTION_ACKNOWLEDGED=${DISK_ENCRYPTION_ACKNOWLEDGED:?DISK_ENCRYPTION_ACKNOWLEDGED is required - enable full-disk encryption on the data volume, then set to true}
+      # Required: the reverse proxy's IP/CIDR (Coolify/Traefik connects from its
+      # Docker-network address, e.g. 10.0.1.0/24 — find it with
+      # `docker network inspect <proxy-network>`). There is deliberately no
+      # default: if the proxy is not trusted, every client resolves to the proxy
+      # IP, so one user's failed logins lock out the whole firm and rate limits
+      # apply to everyone at once. IPs/CIDRs only, not hostnames.
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:?TRUSTED_PROXIES is required - set it to the reverse proxy's IP/CIDR (e.g. the Coolify/Traefik Docker network subnet), otherwise every client collapses to one IP and lockouts/rate limits hit the whole firm}
+      # --- Providers ---
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      - VECTOR_DB=chroma
+      - CHROMA_PERSIST_DIR=/app/data/chroma
+      - UPLOAD_DIR=/app/data/uploads
+    volumes:
+      - casecite_data:/app/data
+    expose:
+      - "80"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+volumes:
+  casecite_data:

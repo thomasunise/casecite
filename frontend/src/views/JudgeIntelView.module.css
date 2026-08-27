@@ -1,0 +1,970 @@
+/* JudgeIntelView — Judge Intelligence.
+   One page, no tabs. Shares the design language of the source-verification
+   popup (CitationModal): hairline rules, uppercase micro-labels, mono
+   metrics, a single quiet white card. */
+
+/* ===== Layout / Area ===== */
+.judgeIntelArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--gray-50);
+  min-height: 0;
+}
+
+/* ===== Building State ===== */
+.judgeIntelBuilding {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 80px 40px;
+  text-align: center;
+}
+
+.buildingTitle {
+  margin: 12px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--navy-900);
+}
+
+.buildingProgress {
+  font-size: 13px;
+  color: var(--gray-600);
+}
+
+.buildingNote {
+  margin-top: 8px;
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+/* ===== Error Box ===== */
+.toolErrorBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--red-50);
+  color: var(--red-600);
+  border-radius: 6px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+/* ===== Search Results (inside shared Tools layout) ===== */
+.judgeIntelResultsList {
+  max-width: 800px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.judgeIntelResultsHeader {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.judgeIntelResultItem {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 16px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.judgeIntelResultItem:hover {
+  border-color: var(--navy-700);
+}
+
+.judgeIntelResultIcon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--gray-100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--navy-700);
+  flex-shrink: 0;
+}
+
+.judgeIntelResultContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.judgeIntelResultName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin-bottom: 3px;
+}
+
+.judgeIntelResultMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.resultChevron {
+  color: var(--gray-400);
+}
+
+/* ===== Profile Page ===== */
+.judgeIntelProfile {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.profilePage {
+  max-width: 860px;
+  margin: 0 auto;
+  /* Bottom padding must clear the floating composer (scope chips + pill,
+     ~150px tall) so the last section scrolls fully into view above it. */
+  padding: 24px 24px 180px;
+}
+
+.judgeIntelBackBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-600);
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+.judgeIntelBackBtn:hover {
+  border-color: var(--gray-400);
+  color: var(--gray-800);
+}
+
+/* The whole profile is one quiet card, like the citation popup. */
+.profileCard {
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.profileHeader {
+  padding: 22px 24px 18px;
+}
+
+.profileOverline {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-700);
+  margin: 0 0 6px;
+}
+
+.judgeProfileName {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--navy-900);
+  margin: 0;
+}
+
+.wikiLink {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--primary);
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.wikiLinkIcon {
+  margin-right: 4px;
+}
+
+.judgeProfileMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-top: 6px;
+}
+
+/* Metrics band — same construction as the citation popup's metrics row */
+.metricsRow {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-200);
+  padding: 4px 0;
+}
+
+.metricBox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 14px;
+}
+
+.metricBox + .metricBox {
+  border-left: 1px solid var(--gray-200);
+}
+
+.metricValue {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--navy-900);
+  margin-bottom: 2px;
+}
+
+.metricLabel {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+}
+
+.profileBody {
+  padding: 24px;
+}
+
+/* ===== Sections (shared by profile, opinions, brief) ===== */
+.judgeProfileContent {
+}
+
+.judgeProfileSection {
+  margin-bottom: 24px;
+}
+
+.judgeProfileSection:last-child {
+  margin-bottom: 0;
+}
+
+.judgeProfileSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  margin: 0 0 10px;
+}
+
+/* Rule extends from the heading to the right edge — technical-document style */
+.judgeProfileSectionTitle::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--gray-200);
+}
+
+.judgeProfileItem {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--gray-100);
+  font-size: 13px;
+  color: var(--gray-800);
+  line-height: 1.5;
+}
+
+.judgeProfileItem:last-child {
+  border-bottom: none;
+}
+
+.judgeProfileItem strong {
+  color: var(--navy-900);
+  font-weight: 600;
+}
+
+.judgeProfileItemMeta {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+/* Slim horizontal bars — case mix / opinions by court */
+.mixBars {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.mixBarRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mixBarLabel {
+  width: 190px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--gray-700);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mixBarTrack {
+  flex: 1;
+  height: 4px;
+  background: var(--gray-100);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.mixBarFill {
+  height: 100%;
+  background: var(--navy-700);
+  border-radius: 2px;
+  width: var(--bar-width);
+}
+
+.mixBarCount {
+  width: 56px;
+  flex-shrink: 0;
+  text-align: right;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-600);
+}
+
+
+/* Activity by year — slim bar chart */
+.yearBarContainer {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 90px;
+  padding: 6px 0 0;
+}
+
+.yearBar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1;
+  min-width: 14px;
+  height: 100%;
+}
+
+.yearBarFill {
+  width: 100%;
+  max-width: 22px;
+  background: var(--navy-700);
+  border-radius: 2px 2px 0 0;
+  height: var(--bar-height);
+}
+
+.yearBarFillActive {
+  min-height: 3px;
+}
+
+.yearBarLabel {
+  font-size: 9px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--gray-500);
+  margin-top: 5px;
+}
+
+/* ===== Opinions Section ===== */
+.opinionFullView {
+  display: flex;
+  flex-direction: column;
+}
+
+.backToResultsBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--gray-600);
+  cursor: pointer;
+  margin-bottom: 12px;
+  width: fit-content;
+}
+
+.opinionFullTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+
+.opinionFullMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.opinionFullText {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--gray-900);
+  white-space: pre-wrap;
+  max-height: 480px;
+  overflow: auto;
+  padding: 14px 16px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+}
+
+.opinionSearchBox {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.opinionSearchInput {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+  background: white;
+  color: var(--gray-900);
+}
+
+.opinionSearchInput:focus {
+  border-color: var(--navy-700);
+}
+
+.opinionSearchBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 9px 16px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.caseLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+.opinionResultsHeader {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--gray-500);
+  margin-bottom: 8px;
+}
+
+.opinionResultsList {
+  display: flex;
+  flex-direction: column;
+}
+
+.opinionResultItem {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--gray-100);
+  cursor: pointer;
+}
+
+.opinionResultItem:last-child {
+  border-bottom: none;
+}
+
+.opinionResultItem:hover .opinionResultName {
+  color: var(--primary);
+}
+
+.opinionResultName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin-bottom: 4px;
+  line-height: 1.4;
+}
+
+.opinionResultMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+.opinionResultSnippet {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 4px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.loadMoreBtn {
+  padding: 9px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 12px;
+  width: 100%;
+}
+
+/* ===== Brief + Ask Section ===== */
+.judgeBriefContent {
+  display: flex;
+  flex-direction: column;
+}
+
+.judgeBriefLoading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 32px;
+  color: var(--gray-600);
+}
+
+.briefLoadingTitle {
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: 6px;
+}
+
+.briefLoadingSubtitle {
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+.judgeBriefText {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--gray-900);
+}
+
+.judgeBriefRegenBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 14px;
+}
+
+/* Brief markdown rendering */
+.briefSpacer {
+  height: 10px;
+}
+
+.briefH2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  margin: 20px 0 8px;
+}
+
+.briefH2::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--gray-200);
+}
+
+.briefH3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin: 14px 0 6px;
+}
+
+.briefH4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin: 12px 0 4px;
+}
+
+.briefBullet {
+  padding-left: 14px;
+  margin-bottom: 5px;
+  display: flex;
+  gap: 8px;
+}
+
+.briefBulletDot {
+  color: var(--navy-700);
+}
+
+.briefParagraph {
+  margin: 0 0 8px;
+  line-height: 1.7;
+}
+
+/* Brief placeholder — one quiet row, not a hero */
+.judgeBriefPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+}
+
+.placeholderTitle {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin-bottom: 3px;
+}
+
+.placeholderDesc {
+  display: block;
+  font-size: 12px;
+  color: var(--gray-600);
+  line-height: 1.5;
+}
+
+.generateBriefBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+/* Chat scope — slim pill row */
+.scopeRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.scopeLabel {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-right: 4px;
+}
+
+.scopePill {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.scopePillActive {
+  border-color: var(--navy-800);
+  background: var(--navy-800);
+  color: var(--on-secondary);
+}
+
+/* Query Messages */
+.judgeQueryMessages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.judgeQueryMessage {
+  display: flex;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.judgeQueryUserMsg {
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  margin-left: 48px;
+}
+
+.judgeQueryAssistantMsg {
+  background: var(--gray-100);
+  color: var(--gray-900);
+  margin-right: 48px;
+  border: 1px solid var(--gray-200);
+}
+
+.judgeQueryMsgContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.msgBullet {
+  margin-left: 12px;
+}
+
+.msgLine {
+  margin-bottom: 6px;
+}
+
+.judgeQueryHints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+.judgeQueryHint {
+  padding: 5px 10px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+
+.judgeQueryHint:hover {
+  border-color: var(--gray-400);
+  color: var(--gray-800);
+}
+
+/* ===== Statistics Section ===== */
+.statChipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.statChip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  min-width: 130px;
+}
+
+.statChipValue {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--navy-900);
+}
+
+.statChipLabel {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+}
+
+.statSubBlock {
+  margin-bottom: 16px;
+}
+
+.statSubBlock:last-child {
+  margin-bottom: 0;
+}
+
+.statSubTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 8px;
+}
+
+.statsDayGrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+}
+
+.statsDayItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+}
+
+.statsDayName {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+}
+
+.statsDayCount {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--navy-900);
+}
+
+/* ===== Spinner ===== */
+.spinnerIcon {
+  animation: spin 1s linear infinite;
+}
+
+.buildingSpinner {
+  animation: spin 1s linear infinite;
+  color: var(--navy-700);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Ask About This Judge header row with the Clear control */
+.judgeQaHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.judgeQaClear {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+.judgeQaClear:hover:not(:disabled) { border-color: var(--gray-300); color: var(--gray-800); }
+.judgeQaClear:disabled { opacity: 0.5; cursor: default; }
+
+/* Profile toolbar: back + rebuild */
+.profileToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.profileSummaryText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-800);
+  margin: 0;
+  max-width: 72ch;
+}
+
+.judgeProfileItemRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.judgeProfileItemLink {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  color: var(--gray-400);
+}
+.judgeProfileItemLink:hover { color: var(--gray-700); }
+
+.statChipDetail {
+  font-size: 11px;
+  color: var(--gray-600);
+}
+
+.dataQuality {
+  font-size: 10.5px;
+  color: var(--gray-500);
+  letter-spacing: 0.02em;
+}
+
+.metricNote {
+  font-size: 12px;
+  color: var(--gray-600);
+  margin-bottom: 12px;
+  max-width: 72ch;
+}

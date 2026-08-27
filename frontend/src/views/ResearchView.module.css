@@ -1,0 +1,1210 @@
+/* ResearchView styles */
+
+/* Chat area layout */
+
+.chatArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* the FloatingChatDock and collapsed-composer pill anchor to this */
+  position: relative;
+}
+
+/* Full-page view: the whole composer collapses to a floating pill */
+.composerToggle {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 8px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.composerCollapseBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+}
+
+.composerCollapseBtn:hover {
+  color: var(--gray-600);
+}
+
+.messagesWrap {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+}
+
+/* Workspace: the knowledge base as the page, conversation floating above */
+
+.workspaceWrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 18px;
+  max-width: 860px;
+  margin: 0 auto;
+  padding-top: 10px;
+}
+
+.workspaceHead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.workspaceTitle {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.workspaceSub {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin: 0;
+  max-width: 540px;
+  line-height: 1.5;
+}
+
+/* Full-screen document view: 1 doc full width, 2 = 50/50, 3-4 = quartered.
+   The file list steps aside entirely; a Files back button returns to it. */
+
+.docScreen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: 10px;
+  /* Same column as the workspace card — full height, not full page width. */
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.docScreenBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.docBackBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  cursor: pointer;
+}
+
+.docBackBtn:hover {
+  border-color: var(--gray-500);
+}
+
+.docScreenTitle {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gray-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docGrid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 12px;
+  overflow-y: auto;
+}
+
+.docGridSplit {
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: minmax(280px, 1fr);
+}
+
+.docPane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(10, 10, 10, 0.03);
+  overflow: hidden;
+}
+
+.docPaneHeader {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-700);
+  border-bottom: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  flex-shrink: 0;
+}
+
+.docPaneName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
+}
+
+/* Native-document vs text-with-anchors toggle inside a pane header */
+.paneToggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--gray-300);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.paneToggleBtn,
+.paneToggleActive {
+  padding: 3px 10px;
+  font-size: 10.5px;
+  font-weight: 500;
+  border: none;
+  background: white;
+  color: var(--gray-500);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.paneToggleActive {
+  background: var(--gray-100);
+  color: var(--gray-800);
+  font-weight: 600;
+}
+
+.docPaneClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.docPaneClose:hover {
+  background: var(--gray-200);
+  color: var(--gray-700);
+}
+
+.docPaneBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 22px;
+}
+
+/* Native document render fills the pane edge-to-edge */
+.docPaneBodyFlush {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.docLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px;
+  font-size: 12.5px;
+  color: var(--gray-500);
+}
+
+/* Files view: return to the open documents without re-opening them */
+.docReturnBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.docReturnBtn:hover {
+  border-color: var(--gray-500);
+}
+
+/* Message rows */
+
+.messageRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.messageRowUser {
+  composes: messageRow;
+  justify-content: flex-end;
+}
+
+.messageRowAssistant {
+  composes: messageRow;
+  justify-content: flex-start;
+}
+
+.assistantAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--navy-800);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold-400);
+  flex-shrink: 0;
+}
+
+/* Bubbles */
+
+.bubble {
+  max-width: 720px;
+  padding: 14px 18px;
+  border-radius: 12px;
+}
+
+.userBubble {
+  composes: bubble;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  margin-left: auto;
+}
+
+.assistantBubble {
+  composes: bubble;
+  background: white;
+  border: 1px solid var(--gray-200);
+}
+
+/* Message content */
+
+.userMessageContent {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--on-secondary);
+}
+
+.statsBar {
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: var(--gray-500);
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--gray-100);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.modeBadge {
+  background: var(--purple-100);
+  color: var(--purple-500);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.messageContent {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-700);
+}
+
+.spacer {
+  height: 8px;
+}
+
+.heading {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-top: 12px;
+  margin-bottom: 6px;
+}
+
+.strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin-top: 12px;
+  margin-bottom: 6px;
+}
+
+.msgLine {
+  margin: 0 0 6px 0;
+}
+
+.listItem {
+  display: block;
+  padding-left: 6px;
+  margin-bottom: 3px;
+}
+
+.statusLine {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.numberedItem {
+  display: block;
+  padding-left: 4px;
+  margin-bottom: 4px;
+}
+
+/* Citations */
+
+.citationsBlock {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gray-100);
+}
+
+.citationsHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 10px;
+}
+
+.citationsHint {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--gray-400);
+  font-size: 10px;
+}
+
+.citationsList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.citationItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  width: 100%;
+}
+
+.citationItemCaseLaw {
+  composes: citationItem;
+  border-left: 3px solid var(--primary);
+}
+
+.citationLeft {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.citationSource {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-800);
+}
+
+.citationType {
+  font-size: 10px;
+  color: var(--gray-500);
+  text-transform: capitalize;
+}
+
+.citationTypeCaseLaw {
+  composes: citationType;
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+.citationRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.confidenceBarWrap {
+  width: 40px;
+  height: 4px;
+  background: var(--gray-200);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.confidenceText {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gray-600);
+  min-width: 28px;
+}
+
+.citationStatus {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.citationStatusApproved {
+  composes: citationStatus;
+  background: var(--green-100);
+  color: var(--green-600);
+}
+
+.citationStatusRejected {
+  composes: citationStatus;
+  background: var(--red-100);
+  color: var(--red-600);
+}
+
+.citationStatusPending {
+  composes: citationStatus;
+  background: var(--gray-100);
+  color: var(--gray-500);
+}
+
+.timestamp {
+  display: block;
+  font-size: 10px;
+  color: var(--gray-400);
+  margin-top: 10px;
+}
+
+/* Processing state */
+
+.processingBubble {
+  padding: 14px 18px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  min-width: 200px;
+}
+
+.processingContent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.progressBar {
+  margin-top: 10px;
+  height: 3px;
+  background: var(--gray-200);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--navy-700);
+  animation: progressBar 2s ease-in-out infinite;
+}
+
+/* Input section */
+
+.inputSection {
+  /* Stays sharp and clickable above the chat dock's blur backdrop — the
+     conversation must never lock the composer. */
+  position: relative;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 20px 16px;
+  background: transparent;
+}
+
+.inputWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 720px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 5px 6px 5px 18px;
+  position: relative;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.inputWrap:focus-within {
+  border-color: var(--navy-700);
+}
+
+.attachBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+/* The input + its animated placeholder ticker share this box; the hint is an
+   overlay that slides up phrase by phrase while the input is empty. */
+.inputTicker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--gray-800);
+  outline: none;
+  padding: 8px 0;
+}
+
+.inputTickerHint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--gray-400);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: hintSlideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes hintSlideUp {
+  from {
+    transform: translateY(130%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+.sendBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.inputHints {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--gray-400);
+  margin-top: 8px;
+}
+
+.kbd {
+  display: inline-block;
+  padding: 2px 5px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+/* Document Selection Panel (Chat With) */
+
+.chatWithPanel {
+  width: 100%;
+  max-width: 720px;
+  margin-bottom: 16px;
+  padding: 16px;
+  background: white;
+  border-radius: 12px;
+  border: 1px solid var(--gray-200);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.chatWithHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.chatWithLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chatWithLabelText {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gray-800);
+}
+
+.caseLawToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--gray-600);
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: var(--gray-100);
+}
+
+.caseLawToggleActive {
+  composes: caseLawToggle;
+  background: var(--blue-100);
+}
+
+.caseLawCheckbox {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--blue-600);
+}
+
+.docSelectBtnGroup {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.docSelectBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.docSelectBtnActive {
+  composes: docSelectBtn;
+  border: 2px solid var(--navy-700);
+  background: var(--navy-50, #f0f4f8);
+}
+
+/* Selected files info */
+
+.selectedFilesInfo {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--green-50, #f0fdf4);
+  border-radius: 8px;
+  border: 1px solid var(--green-200, #bbf7d0);
+}
+
+.selectedFilesInfoRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--green-700, #15803d);
+}
+
+.selectedFilesInfoText {
+  font-weight: 500;
+}
+
+.changeBtn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--green-700);
+  cursor: pointer;
+  font-size: 12px;
+  text-decoration: underline;
+}
+
+/* Warning box */
+
+.warningBox {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: var(--amber-50, #fffbeb);
+  border-radius: 8px;
+  border: 1px solid var(--amber-200, #fde68a);
+}
+
+.warningContent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--amber-700, #b45309);
+}
+
+/* Lock overlay */
+
+.lockOverlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  cursor: pointer;
+  z-index: 10;
+  border: 2px dashed var(--gold-500);
+}
+
+.lockText {
+  font-weight: 600;
+  color: var(--navy-700);
+}
+
+.lockCta {
+  padding: 6px 12px;
+  background: var(--gold-500);
+  color: var(--on-primary);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Unauthenticated hint */
+
+.unauthHint {
+  color: var(--gold-600);
+}
+
+/* Case law stat color */
+
+.caseLawStat {
+  color: var(--primary);
+}
+
+/* Empty state icon color */
+
+/* Confidence bar fill variants */
+
+.confidenceBarFill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+  width: var(--confidence-width);
+}
+
+.confidenceHigh {
+  background: var(--green-500);
+}
+
+.confidenceMid {
+  background: var(--amber-500);
+}
+
+.confidenceLow {
+  background: var(--red-500);
+}
+
+/* Spinner animation */
+
+.spinnerIcon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Chat with panel icon colors */
+
+.chatWithIcon {
+  color: var(--navy-700);
+}
+
+.chatWithActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Document select button icon colors */
+
+.docSelectIconNavy {
+  color: var(--navy-600);
+}
+
+.docSelectIconGold {
+  color: var(--gold-600);
+}
+
+.docSelectIconPurple {
+  color: var(--purple-600);
+}
+
+/* Lock icon color */
+
+.lockIcon {
+  color: var(--gold-600);
+}
+
+/* Send button disabled state */
+
+.sendBtnDisabled {
+  opacity: 0.5;
+}
+
+@keyframes progressBar {
+  0% { width: 0; }
+  50% { width: 70%; }
+  100% { width: 100%; }
+}
+
+/* ==================== Matter Strategy additions ==================== */
+
+/* Suggested prompts in the empty state */
+
+/* Strategy brief card — editorial, matches the citation-analysis language */
+.briefCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.briefOverline {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-700);
+  margin-bottom: 6px;
+}
+
+.briefTruncNote { color: var(--gray-500); }
+
+.briefPosition {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--gray-900);
+}
+
+.briefSection { margin-top: 10px; }
+
+.briefSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  margin-bottom: 8px;
+}
+
+.briefSectionTitle::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--gray-200);
+}
+
+.briefPoint {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.briefPoint:last-child { border-bottom: none; }
+
+.briefPointNum {
+  width: 16px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 11px;
+  color: var(--gray-400);
+  line-height: 1.5;
+}
+
+.briefPointBody { flex: 1; min-width: 0; }
+
+.briefPointText {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--gray-800);
+}
+
+.briefCites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.briefCiteChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border: 1px solid var(--gray-300);
+  border-radius: 9999px;
+  background: white;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--gray-700);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.briefCiteChip:hover {
+  border-color: var(--navy-700);
+  color: var(--navy-900);
+}
+
+/* Compact numbered source pills — the full rows live in the Sources panel */
+.citationPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
+.citationPill,
+.citationPillUnverified {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.citationPill:hover {
+  border-color: var(--navy-700);
+  color: var(--navy-900);
+}
+
+.citationPillUnverified {
+  border-color: var(--amber-500);
+  background: var(--amber-50);
+  color: var(--amber-700);
+}
+
+/* Binary verification badges — never scores or match-strength gradients:
+   a citation is verified verbatim in its source, or it is flagged. */
+.verifiedBadge,
+.unverifiedBadge {
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.verifiedBadge { background: var(--green-50); color: var(--green-700); }
+.unverifiedBadge { background: var(--amber-50); color: var(--amber-700); }
+
+.briefAuthorities {
+  margin-top: 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.briefAuthority {
+  padding: 7px 10px;
+  border: 1px solid var(--gray-200);
+  border-left: 2px solid var(--navy-700);
+  border-radius: 4px;
+  background: var(--gray-50);
+}
+
+.briefAuthorityHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--navy-900);
+}
+
+.briefAuthorityName { font-weight: 600; }
+
+.briefAuthorityNameBtn {
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--navy-900);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--gray-300);
+  text-underline-offset: 2px;
+}
+
+.briefAuthorityNameBtn:hover { text-decoration-color: var(--navy-700); }
+
+.briefAuthorityCite {
+  font-size: 10px;
+  color: var(--gray-600);
+}
+
+.briefAuthorityVerified {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--green-700, #15803d);
+}
+
+.briefAuthorityLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--gray-500);
+  text-decoration: none;
+}
+
+.briefAuthorityLink:hover { color: var(--navy-800); }
+
+.briefAuthorityQuote {
+  margin: 5px 0 0;
+  padding: 0;
+  border: none;
+  font-size: 11.5px;
+  line-height: 1.55;
+  font-style: italic;
+  color: var(--gray-700);
+}
+
+.briefAuthorityHow {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gray-600);
+}
+
+.briefCaseLawNote {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--gray-300);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gray-600);
+}
+

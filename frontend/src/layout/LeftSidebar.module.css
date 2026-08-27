@@ -1,0 +1,316 @@
+/* LeftSidebar styles */
+
+.sidebar {
+  width: 270px;
+  background: var(--chrome-bg);
+  border-right: 1px solid var(--chrome-edge);
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  transition: width 0.2s ease;
+  position: relative;
+}
+
+.sidebarCollapsed {
+  width: 60px;
+}
+
+.collapseToggle {
+  position: absolute;
+  right: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 48px;
+  background: var(--chrome-bg-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: 0 8px 8px 0;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  box-shadow: 2px 0 8px rgba(0, 0, 0, 0.2);
+}
+
+.sidebarInner {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  padding: 16px 14px;
+  /* doc list scrolls internally (flex), so the sidebar itself won't scroll on a
+     normal screen; auto is only a safety fallback for very short viewports */
+  overflow-y: auto;
+}
+
+.sidebarInnerCollapsed {
+  padding: 16px 8px;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 8px 6px 18px;
+  border-bottom: 1px solid var(--chrome-border);
+  margin-bottom: 18px;
+}
+
+.logoCollapsed {
+  padding: 8px 2px 18px;
+  justify-content: center;
+}
+
+.logoImg {
+  width: 70%;
+  max-height: 26px;
+  object-fit: contain;
+}
+
+.logoWordmark {
+  font-family: 'Source Serif 4', Georgia, serif;
+  font-weight: 500;
+  font-size: 22px;
+  line-height: 1.2;
+  color: var(--chrome-wordmark);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.logoDot {
+  /* Darker red than the old asterisk mark (#C8102E). Scaled up so the period
+     reads as a deliberate mark, not punctuation; line-height 0 keeps the
+     bigger glyph from stretching the logo row. */
+  color: #8A0F1F;
+  font-size: 1.5em;
+  /* line-height 0 keeps the scaled-up glyph from stretching the logo row;
+     it stays a normal period sitting on the baseline. */
+  line-height: 0;
+}
+
+.modeSection {
+  margin-bottom: 22px;
+}
+
+.sectionLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--chrome-text-faint);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 0 6px;
+  margin-bottom: 6px;
+}
+
+.modeList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.modeListCollapsed {
+  gap: 4px;
+}
+
+.modeBtn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.modeBtnActive {
+  background: var(--chrome-fill);
+}
+
+.modeBtnCollapsed {
+  padding: 10px;
+  justify-content: center;
+}
+
+.modeBtnLocked {
+  opacity: 0.6;
+}
+
+.lockIconExpanded {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.lockIconCollapsed {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.modeIcon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--chrome-fill-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--chrome-text-muted);
+  flex-shrink: 0;
+}
+
+.modeIconActive {
+  background: var(--gold-500);
+  color: var(--on-primary);
+}
+
+.modeContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.modeTitle {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--chrome-text-secondary);
+}
+
+.modeDesc {
+  display: block;
+  font-size: 10px;
+  color: var(--chrome-text-faint);
+}
+
+/* Collapsed upload section */
+.collapsedUploadSection {
+  margin-top: 16px;
+  border-top: 1px solid var(--chrome-border);
+  padding-top: 16px;
+}
+
+.collapsedUploadBtn {
+  width: 100%;
+  padding: 10px;
+  background: var(--chrome-fill);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+}
+
+.collapsedUploadBtnLocked {
+  opacity: 0.6;
+}
+
+.collapsedDocCount {
+  text-align: center;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+/* Integrations */
+.integrationsSection {
+  margin-bottom: 16px;
+  margin-top: 16px;
+}
+
+.integrationsSectionCollapsed {
+  margin-top: 12px;
+}
+
+.integrationsList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.integrationBtn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  transition: background 0.15s;
+  position: relative;
+}
+
+.integrationBtnCollapsed {
+  padding: 8px;
+  justify-content: center;
+}
+
+.integrationBtnLocked {
+  opacity: 0.6;
+}
+
+.integrationIcon {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.integrationName {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--chrome-text-secondary);
+}
+
+.integrationDocs {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gold-400);
+  background: var(--chrome-fill);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.seeProvidersBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px 10px;
+  margin-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 11px;
+  color: var(--chrome-text-faint);
+  transition: color 0.2s;
+}
+
+.seeProvidersBtn:hover {
+  color: var(--chrome-text-muted);
+}
+
+/* Icon color utility classes (extracted from inline styles) */
+.iconGray400 {
+  color: var(--gray-400);
+}
+
+.iconGold500 {
+  color: var(--gold-500);
+}
+
+.iconWhite30 {
+  color: var(--chrome-text-faint);
+}

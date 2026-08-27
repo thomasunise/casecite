@@ -1,0 +1,72 @@
+.overlay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--gray-50) 0%, var(--gray-100) 100%);
+  padding: 60px 40px;
+  text-align: center;
+}
+
+.iconCircle {
+  width: 80px;
+  height: 80px;
+  background: var(--gold-100);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.heading {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--navy-800);
+  margin-bottom: 12px;
+}
+
+.subtext {
+  font-size: 16px;
+  color: var(--gray-600);
+  max-width: 400px;
+  margin-bottom: 32px;
+  line-height: 1.6;
+}
+
+.buttonGroup {
+  display: flex;
+  gap: 16px;
+}
+
+.primaryButton {
+  padding: 14px 32px;
+  background: var(--navy-700);
+  color: var(--on-secondary);
+  border: none;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.secondaryButton {
+  padding: 14px 32px;
+  background: white;
+  color: var(--navy-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+/* ── Extracted from inline styles ── */
+
+.iconGold {
+  color: var(--gold-600);
+}

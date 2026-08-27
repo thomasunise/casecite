@@ -1,0 +1,874 @@
+/* ContractsView — chat-first contract review.
+   House card style: white cards on var(--gray-100), hairline borders,
+   uppercase micro-labels, navy data marks. Composer replicates the canonical
+   Matter Strategy floating pill (circular send button, floating box, not a band). */
+
+.view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--gray-100);
+  position: relative;
+}
+
+.dropOverlay {
+  position: absolute;
+  inset: 8px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 2px dashed var(--gold-600);
+  border-radius: 14px;
+  background: var(--gold-50);
+  color: var(--gray-700);
+  font-size: 14px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* Rectangle family — same shape as the Select files button. */
+.uploadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.uploadBtn:hover:not(:disabled) {
+  border-color: var(--gray-300);
+}
+
+.uploadBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.hiddenInput {
+  display: none;
+}
+
+
+
+
+/* The floating conversation overlay is the shared FloatingChatDock component. */
+
+/* ===== Quick action bar ===== */
+.actionBar {
+  /* Above the chat dock's blur backdrop, like the composer below it. */
+  position: relative;
+  z-index: 60;
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 14px 20px 4px;
+}
+
+.actionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-700);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.actionChip:hover:not(:disabled) {
+  border-color: var(--gold-600);
+  color: var(--gray-900);
+}
+
+.actionChip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.actionChipActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 9999px;
+  border: 1px solid var(--navy-800);
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  cursor: pointer;
+}
+
+/* ===== Toolbar ===== */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  background: white;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.docSelect {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  font-size: 13px;
+  background: white;
+  color: var(--gray-900);
+  outline: none;
+  max-width: 320px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.docSelect:hover,
+.docSelect:focus {
+  border-color: var(--gold-600);
+}
+
+.docSelect:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.docSelectName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.docSelectIcon {
+  flex-shrink: 0;
+  color: var(--gray-500);
+}
+
+.pastToggle,
+.pastToggleActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s;
+}
+
+.pastToggle:hover {
+  border-color: var(--gray-300);
+}
+
+.pastToggleActive {
+  border-color: var(--navy-700);
+  color: var(--navy-800);
+  background: var(--gray-50);
+}
+
+/* ===== Compare dropdown ===== */
+.compareWrap {
+  position: relative;
+}
+
+.compareMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 240px;
+  max-width: 340px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+}
+
+.compareMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 13px;
+  color: var(--gray-800);
+  text-align: left;
+  cursor: pointer;
+}
+
+.compareMenuItem:hover {
+  background: var(--gray-50);
+}
+
+.compareMenuIcon {
+  color: var(--navy-700);
+  flex-shrink: 0;
+}
+
+.compareMenuName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== Past analyses panel (collapsible) ===== */
+.pastPanel {
+  background: white;
+  border-bottom: 1px solid var(--gray-200);
+  padding: 6px 16px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.pastEmpty {
+  margin: 8px 0;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.pastRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 0;
+  border: none;
+  border-bottom: 1px solid var(--gray-100);
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pastRow:last-child {
+  border-bottom: none;
+}
+
+.pastRow:hover:not(:disabled) .pastType {
+  color: var(--primary);
+}
+
+.pastRow:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.pastRowIcon {
+  color: var(--navy-700);
+}
+
+.pastType {
+  font-weight: 600;
+  color: var(--navy-900);
+}
+
+.pastMeta {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.pastRisk {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-600);
+}
+
+.pastChevron {
+  color: var(--gray-400);
+}
+
+/* ===== Messages ===== */
+.messagesWrap {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.messageRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.messageRowUser {
+  composes: messageRow;
+  justify-content: flex-end;
+}
+
+.messageRowAssistant {
+  composes: messageRow;
+  justify-content: flex-start;
+}
+
+.assistantAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--navy-800);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold-400);
+  flex-shrink: 0;
+}
+
+.bubble {
+  max-width: 720px;
+  padding: 14px 18px;
+  border-radius: 12px;
+}
+
+.userBubble {
+  composes: bubble;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  margin-left: auto;
+}
+
+.assistantBubble {
+  composes: bubble;
+  background: white;
+  border: 1px solid var(--gray-200);
+}
+
+/* Analysis results are dense — let them take the full row width. */
+.analysisBubble {
+  composes: assistantBubble;
+  max-width: none;
+  flex: 1;
+  min-width: 0;
+  padding: 20px 22px;
+}
+
+.userMessageContent {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--on-secondary);
+}
+
+.messageContent {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-700);
+}
+
+/* ===== Processing bubble ===== */
+.processingBubble {
+  padding: 14px 18px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  min-width: 240px;
+}
+
+.processingContent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.progressBar {
+  margin-top: 10px;
+  height: 3px;
+  background: var(--gray-200);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--navy-700);
+  animation: contractsProgress 2s ease-in-out infinite;
+}
+
+@keyframes contractsProgress {
+  0% { width: 0; }
+  50% { width: 70%; }
+  100% { width: 100%; }
+}
+
+.spin {
+  animation: contractsSpin 0.8s linear infinite;
+}
+
+@keyframes contractsSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ===== Empty state ===== */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  text-align: center;
+  padding: 40px;
+}
+
+.emptyStateIcon {
+  color: var(--gray-300);
+}
+
+.emptyTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin: 16px 0 0;
+}
+
+.emptyText {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin: 8px 0 0;
+  max-width: 440px;
+  line-height: 1.5;
+}
+
+.emptyActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+  align-items: center;
+}
+
+.emptySelectBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 20px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid var(--navy-800);
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.emptySelectBtn:hover {
+  background: var(--navy-700);
+}
+
+.emptyUploadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.emptyUploadBtn:hover {
+  border-color: var(--navy-700);
+  color: var(--navy-900);
+}
+
+.emptyUploadBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.emptyHint {
+  font-size: 12px;
+  color: var(--gray-400);
+  margin: 12px 0 0;
+}
+
+/* ===== Floating composer (canonical Matter Strategy style) ===== */
+.inputSection {
+  /* Stays sharp and clickable above the chat dock's blur backdrop — the
+     conversation must never lock the composer. */
+  position: relative;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 20px 16px;
+  background: transparent;
+}
+
+.inputWrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 720px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 5px 6px 5px 18px;
+  position: relative;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.inputWrap:focus-within {
+  border-color: var(--navy-700);
+}
+
+.input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  color: var(--gray-800);
+  outline: none;
+  padding: 8px 0;
+}
+
+.input:disabled {
+  cursor: not-allowed;
+}
+
+.sendBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  flex-shrink: 0;
+}
+
+.sendBtnDisabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.inputHints {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--gray-400);
+  margin-top: 8px;
+}
+
+.kbd {
+  display: inline-block;
+  padding: 2px 5px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+/* ===== Clarify (intent question) chips ===== */
+.clarifyOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.clarifyChip {
+  padding: 8px 12px;
+  font-size: 12.5px;
+  text-align: left;
+  border: 1px solid var(--gray-200);
+  border-radius: 9px;
+  background: white;
+  color: var(--gray-800);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.clarifyChip:hover:not(:disabled) {
+  border-color: var(--gold-600);
+}
+
+.clarifyChip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ===== Composer collapse: full-document view ===== */
+.composerToggle {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 8px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+.composerToggle:hover {
+  color: var(--gray-800);
+}
+
+.composerCollapseBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+}
+
+.composerCollapseBtn:hover {
+  color: var(--gray-600);
+}
+
+
+/* Floating conversation dock — the contracts composer is taller than the
+   default (mode pills stack above the input), so the panel rests higher to
+   never cover the Ask/Review/Redline/Draft pills. */
+.dockOffsets {
+  --dock-bottom: 168px;
+  --dock-bottom-low: 40px;
+}
+
+/* ── Armed comparison strip (above the composer) ─────────────────── */
+.compareArmedStrip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 720px;
+  margin: 0 auto 8px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--navy-800);
+  background: var(--navy-50, #eef2f7);
+  border: 1px solid var(--navy-200, #c7d4e4);
+  border-radius: 8px;
+}
+
+.compareArmedStrip strong { font-weight: 600; }
+
+.compareArmedCancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: auto;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.compareArmedCancel:hover { background: var(--gray-100); color: var(--gray-700); }
+
+.comparisonSetStack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ── Drafting canvas (pre-draft page) ────────────────────────────── */
+.draftCanvas {
+  position: relative;
+  max-width: 860px;
+  margin: 0 auto;
+  min-height: 480px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Reference documents bar — the draft's source material lives up top. */
+.draftRefBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px;
+  padding-right: 52px; /* clear the close button */
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.draftRefBarLabel {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  margin-right: 4px;
+}
+
+.attachRefBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px dashed var(--gray-300);
+  border-radius: 8px;
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+.attachRefBtn:hover:not(:disabled) { border-color: var(--navy-700); color: var(--navy-800); }
+.attachRefBtn:disabled { opacity: 0.5; cursor: default; }
+
+.draftCanvasClose {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  cursor: pointer;
+}
+.draftCanvasClose:hover { background: var(--gray-200); }
+
+.draftCanvasBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  text-align: center;
+  gap: 10px;
+  max-width: 460px;
+  padding: 40px 24px;
+}
+
+.draftCanvasIcon { color: var(--navy-700); }
+
+.draftCanvasTitle {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin: 0;
+}
+
+.draftCanvasText {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-500);
+  margin: 0;
+}
+
+/* Paperclip in the composer — same square family as the send button. */
+.attachBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.attachBtn:hover:not(:disabled) { background: var(--gray-200); color: var(--gray-800); }
+.attachBtn:disabled { opacity: 0.5; cursor: default; }
+
+/* Attached drafting reference chip on the canvas */
+.draftRefChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  color: var(--navy-800);
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  max-width: 100%;
+}
+
+.draftRefName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.draftRefClear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.draftRefClear:hover { background: var(--gray-200); color: var(--gray-700); }

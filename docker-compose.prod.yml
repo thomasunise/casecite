@@ -1,0 +1,162 @@
+# Production Docker Compose for Hetzner/VPS Deployment
+# Usage: docker compose -f docker-compose.prod.yml up -d
+#
+# Image source: the backend (and the one-shot frontend-build step, which copies
+# the SPA out of the same image) run CASECITE_IMAGE:CASECITE_TAG. With the
+# defaults that is the image CI publishes to GHCR, so `pull` + `up -d` deploys
+# and `CASECITE_TAG=<sha> ... up -d` rolls back to any earlier build. To build
+# from source instead: `docker compose -f docker-compose.prod.yml up -d --build`
+# (the local build is tagged with the same name).
+
+services:
+  # Caddy - Automatic HTTPS reverse proxy
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - frontend_dist:/srv:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    healthcheck:
+      # Caddy's admin endpoint (localhost:2019) answers once config is loaded
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - casecite_network
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: casecite
+      POSTGRES_USER: ${POSTGRES_USER:-casecite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-casecite} -d casecite"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - casecite_network
+
+  # Redis for session/token management and rate limiting
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # Authenticate: an unauthenticated `ping` against --requirepass returns
+      # NOAUTH, which is a reply, not a failure — the check would pass while
+      # the server was unusable.
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    networks:
+      - casecite_network
+
+  # Backend API
+  backend:
+    image: ${CASECITE_IMAGE:-ghcr.io/thomasunise/casecite}:${CASECITE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Non-secret configuration only; secrets come from .env via env_file
+      - DEBUG=false
+      # The bundled postgres:16-alpine has no TLS and lives only on the isolated
+      # casecite_network below, so default to the in-network no-TLS mode. If you
+      # point DATABASE_URL at a managed/external database, set DB_SSL=require.
+      - DB_SSL=${DB_SSL:-internal}
+      - VECTOR_DB=chroma
+      - CHROMA_PERSIST_DIR=/app/data/chroma
+      - UPLOAD_DIR=/app/data/uploads
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://${DOMAIN:-localhost}}
+      - ALLOWED_HOSTS=${DOMAIN:-localhost}
+      # Confirm the /app/data volume is on an encrypted disk (LUKS/BitLocker/
+      # FileVault or provider disk encryption). Derived privileged text is stored
+      # in cleartext; the app refuses to start until this is set to true.
+      - DISK_ENCRYPTION_ACKNOWLEDGED=${DISK_ENCRYPTION_ACKNOWLEDGED:?enable full-disk encryption on the data volume, then set to true}
+      # Must be an IP or CIDR (hostnames are not parseable). Matches the pinned
+      # casecite_network subnet below so Caddy's X-Forwarded-For is honored.
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-172.28.0.0/24}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-casecite}:${POSTGRES_PASSWORD}@postgres:5432/casecite
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - rag_data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - casecite_network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+
+  # Frontend publisher (runs once per deploy to populate the dist volume Caddy
+  # serves). Copies the SPA out of the SAME backend image, so a pulled image
+  # deploys without a local source checkout and a rollback tag rolls the
+  # frontend back with it.
+  frontend-build:
+    image: ${CASECITE_IMAGE:-ghcr.io/thomasunise/casecite}:${CASECITE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - frontend_dist:/output
+    # Clear the volume before copying so upgrades never serve stale hashed
+    # assets left over from a previous build.
+    entrypoint: ["sh", "-c", "rm -rf /output/* && cp -r /var/www/html/. /output/"]
+    restart: "no"
+
+volumes:
+  rag_data:
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
+  frontend_dist:
+    driver: local
+
+networks:
+  casecite_network:
+    driver: bridge
+    ipam:
+      config:
+        # Pinned so TRUSTED_PROXIES above stays correct across recreations.
+        - subnet: 172.28.0.0/24

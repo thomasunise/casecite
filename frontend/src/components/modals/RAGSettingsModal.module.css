@@ -1,0 +1,1086 @@
+/* RAGSettingsModal – migrated from inline styles */
+
+/* ── Modal framework ── */
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: fadeIn 0.15s;
+}
+
+.modalContainer {
+  background: white;
+  border-radius: 14px;
+  width: 100%;
+  max-width: 880px;
+  /* Fixed height so the modal stays the same size on every tab; the body scrolls. */
+  height: 82vh;
+  max-height: 820px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: scaleIn 0.15s;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.modalHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.modalIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--navy-800);
+}
+
+.modalIconWhite {
+  color: var(--on-secondary);
+}
+
+.modalTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.modalSubtitle {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.modalClose {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--gray-500);
+}
+
+.tabBar {
+  display: flex;
+  border-bottom: 1px solid var(--gray-200);
+  padding: 0 12px;
+}
+
+.modalBody {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+}
+
+.modalFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid var(--gray-200);
+  background: var(--gray-50);
+}
+
+/* ── Settings / Form controls ── */
+.settingsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+.settingGroup {
+  margin-bottom: 0;
+}
+
+.settingGroupFullWidth {
+  margin-bottom: 0;
+  grid-column: 1 / -1;
+}
+
+.settingLabel {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 6px;
+}
+
+.settingLabelBlue {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue-800);
+  margin-bottom: 6px;
+}
+
+.settingLabelLarger {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 6px;
+}
+
+.select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--gray-800);
+  background: white;
+  cursor: pointer;
+}
+
+.modalInput {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--gray-800);
+  outline: none;
+}
+
+.modalInputMono {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--gray-800);
+  outline: none;
+  flex: 1;
+  font-family: monospace;
+}
+
+.textareaLarge {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  color: var(--gray-800);
+  outline: none;
+  min-height: 150px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.textareaMedium {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  color: var(--gray-800);
+  outline: none;
+  min-height: 120px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.textareaSmall {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  color: var(--gray-800);
+  outline: none;
+  min-height: 100px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.textareaModePrompt {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  color: var(--gray-800);
+  outline: none;
+  min-height: 80px;
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.sliderHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.sliderValue {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy-700);
+}
+
+/* ── Toggles ── */
+.toggleList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toggleItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: var(--gray-50);
+  border-radius: 8px;
+}
+
+.reindexBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--navy-700);
+  border-radius: 6px;
+  background: white;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy-800);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+
+.reindexBtn:hover:not(:disabled) { background: var(--gray-100); }
+.reindexBtn:disabled { opacity: 0.6; cursor: default; }
+
+.spin {
+  animation: reindexSpin 1s linear infinite;
+}
+
+@keyframes reindexSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.toggleLabel {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-800);
+}
+
+.toggleDesc {
+  font-size: 10px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+.toggleSwitch {
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.toggleSwitchOn {
+  background: var(--navy-700);
+}
+
+.toggleSwitchOff {
+  background: var(--gray-300);
+}
+
+.toggleKnob {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: white;
+  position: absolute;
+  top: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggleKnobOn {
+  transform: translateX(20px);
+}
+
+.toggleKnobOff {
+  transform: translateX(2px);
+}
+
+/* ── Buttons ── */
+.btnPrimary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnSecondary {
+  padding: 10px 18px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnSecondarySmall {
+  padding: 8px 12px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnSecondaryXSmall {
+  padding: 4px 10px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnSecondaryXXSmall {
+  padding: 3px 8px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnSecondaryFullWidth {
+  padding: 10px 18px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  width: 100%;
+}
+
+/* ── API Key info banners ── */
+.byokBanner {
+  grid-column: 1 / -1;
+  padding: 12px 16px;
+  background: var(--blue-50);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--blue-200);
+}
+
+.promptsBanner {
+  grid-column: 1 / -1;
+  padding: 12px 16px;
+  background: var(--amber-50);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--amber-200);
+}
+
+.bannerHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.bannerIconBlue {
+  color: var(--blue-600);
+}
+
+.bannerIconAmber {
+  color: var(--amber-600);
+}
+
+.bannerTitleBlue {
+  font-weight: 600;
+  color: var(--blue-800);
+  font-size: 13px;
+}
+
+.bannerTitleAmber {
+  font-weight: 600;
+  color: var(--amber-800);
+  font-size: 13px;
+}
+
+.bannerTextBlue {
+  font-size: 12px;
+  color: var(--blue-700);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.bannerTextAmber {
+  font-size: 12px;
+  color: var(--amber-700);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* ── API key provider rows ── */
+.labelFlex {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.providerIcon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.providerIconOpenAI {
+  background: #10a37f;
+}
+
+.providerIconAnthropic {
+  background: #d4a27f;
+}
+
+.providerIconGoogle {
+  background: linear-gradient(135deg, #4285f4, #ea4335, #fbbc05, #34a853);
+}
+
+.providerIconText {
+  color: white;
+  font-size: 11px;
+  font-weight: bold;
+}
+
+.providerIconTextSmall {
+  color: white;
+  font-size: 10px;
+  font-weight: bold;
+}
+
+.checkIcon {
+  color: var(--green-500);
+}
+
+/* Inline auto-save status next to a field label */
+.saveHint,
+.saveHintOk,
+.saveHintErr {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: auto;
+}
+.saveHint { color: var(--gray-400); }
+.saveHintOk { color: var(--green-500); }
+.saveHintErr { color: var(--red-500, #ef4444); }
+
+.inputRow {
+  display: flex;
+  gap: 8px;
+}
+
+.helpText {
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+.helpTextBlue {
+  font-size: 11px;
+  color: var(--blue-600);
+}
+
+/* ── Settings section dividers ── */
+.sectionTitle {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--gray-500);
+  margin: 10px 0 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.sectionTitle:first-child {
+  margin-top: 0;
+}
+
+.sectionSubtext {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin: -8px 0 0;
+  line-height: 1.5;
+}
+
+/* ── Local / self-hosted model highlighted box ── */
+.localModelBox {
+  grid-column: 1 / -1;
+  background: var(--amber-50);
+  border: 1px solid var(--amber-200);
+  border-radius: 10px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.localModelHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.localModelTitle {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--amber-800);
+}
+
+.localModelDesc {
+  font-size: 11px;
+  color: var(--amber-700);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.boxActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.boxActionsSpread {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* ── Key Status section ── */
+.keyStatusSection {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding: 12px;
+  background: var(--gray-50);
+  border-radius: 8px;
+}
+
+.keyStatusTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 8px;
+}
+
+.keyStatusList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.keyBadge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.keyBadgeActive {
+  background: var(--green-100);
+  color: var(--green-700);
+}
+
+.keyBadgeRequired {
+  background: var(--red-100);
+  color: var(--red-700);
+}
+
+.keyBadgeOptional {
+  background: var(--gray-100);
+  color: var(--gray-500);
+}
+
+/* ── Prompts tab specifics ── */
+.quickAnswerBlock {
+  margin-bottom: 0;
+  grid-column: 1 / -1;
+  background: var(--blue-50);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--blue-200);
+}
+
+.promptBlockHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.autoDetectedBadge {
+  font-size: 11px;
+  color: var(--blue-600);
+  margin-left: 8px;
+  background: var(--blue-100);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+/* ── Mode Prompts accordion ── */
+.modePromptsAccordion {
+  grid-column: 1 / -1;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.modePromptsSummary {
+  padding: 12px 16px;
+  background: var(--gray-50);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--gray-700);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modePromptsSummaryNote {
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-left: auto;
+}
+
+.modePromptsBody {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.modeLabelIcon {
+  margin-right: 6px;
+  color: var(--navy-600);
+}
+
+/* ── Full-width wrapper (used in several places) ── */
+.fullWidth {
+  grid-column: 1 / -1;
+}
+
+/* ── Reset All button area ── */
+.resetAllWrapper {
+  grid-column: 1 / -1;
+}
+
+/* ── Users Tab ── */
+.usersTabContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.inviteCard {
+  padding: 16px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+}
+
+.inviteRow {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-top: 10px;
+}
+
+.inviteField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 160px;
+  min-width: 140px;
+}
+
+.tempPasswordBox {
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--green-100);
+  border-radius: 8px;
+}
+
+.tempPasswordLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green-700);
+  margin-bottom: 4px;
+}
+
+.tempPasswordValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--gray-800);
+}
+
+.userList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.userRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+}
+
+.userRowInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.userName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-800);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.userEmail {
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+.youBadge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--navy-700);
+  background: var(--gray-200);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.userRoleSelect {
+  width: 150px;
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--gray-800);
+  background: white;
+  cursor: pointer;
+}
+
+/* ── Branding Tab ── */
+.brandingTabContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.brandingLogoZone {
+  border: 2px dashed var(--gray-300);
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.brandingLogoZone:hover {
+  border-color: var(--gold-600);
+}
+
+.brandingLogoPreview {
+  max-width: 120px;
+  max-height: 80px;
+  margin: 0 auto 8px;
+  display: block;
+  border-radius: 6px;
+}
+
+.brandingUploadText {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.brandingUploadHint {
+  font-size: 10px;
+  color: var(--gray-400);
+  margin-top: 4px;
+}
+
+.brandingColorRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.brandingColorLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  min-width: 80px;
+}
+
+.brandingColorInput {
+  width: 40px;
+  height: 32px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 2px;
+}
+
+.brandingColorHex {
+  font-size: 12px;
+  font-family: monospace;
+  color: var(--gray-700);
+  padding: 6px 10px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  width: 90px;
+  box-sizing: border-box;
+}
+
+.brandingPreview {
+  margin-top: 4px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--gray-50);
+}
+
+.brandingPreviewLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  margin-bottom: 8px;
+}
+
+.brandingSwatchRow {
+  display: flex;
+  gap: 6px;
+}
+
+.brandingSwatch {
+  width: 40px;
+  height: 28px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.brandingActions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 12px;
+  border-top: 1px solid var(--gray-200);
+}
+
+.brandingResetBtn {
+  padding: 8px 14px;
+  background: white;
+  color: var(--red-600);
+  border: 1px solid var(--red-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ── Role permissions matrix (Users tab) ─────────────────────────── */
+
+.permSection {
+  margin-top: 24px;
+  border-top: 1px solid var(--gray-200);
+  padding-top: 18px;
+}
+
+.permHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.permTableWrap {
+  overflow-x: auto;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+}
+
+.permTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.permTable th {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-600);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  white-space: nowrap;
+}
+
+.permTable th.permNameCol {
+  text-align: left;
+}
+
+.permNameCol {
+  text-align: left;
+  padding: 8px 12px;
+  min-width: 220px;
+}
+
+.permRoleCol {
+  min-width: 70px;
+}
+
+.permCustomBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--navy-700);
+  background: var(--navy-50, #eef2f7);
+  border-radius: 3px;
+  vertical-align: 1px;
+}
+
+.permGroupRow td {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  border-bottom: 1px solid var(--gray-100);
+  background: var(--gray-50);
+}
+
+.permTable tbody td {
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.permTable tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.permLabel {
+  display: block;
+  font-weight: 500;
+  color: var(--gray-800);
+}
+
+.permDesc {
+  display: block;
+  font-size: 10.5px;
+  color: var(--gray-500);
+  margin-top: 1px;
+}
+
+.permCheckCell {
+  text-align: center;
+  padding: 8px 10px;
+}
+
+.permCheckbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--navy-700);
+  cursor: pointer;
+}
+
+.permCheckbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}

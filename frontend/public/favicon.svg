@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#0A0A0A"/>
+  <!-- 'C' from Bespoke Serif Medium, converted to an outline path -->
+  <g transform="translate(11.53 52.3) scale(0.058 -0.058)" fill="#FFFFFF">
+    <path d="M649 32Q550 -12 420 -12Q244 -12 150.5 85.5Q57 183 57 351Q57 513 149.0 612.5Q241 712 416 712Q540 712 639 667L625 482H588Q573 482 568 497Q547 544 535 620Q488 652 411 652Q319 652 259.0 576.5Q199 501 199 373Q199 223 261.5 135.0Q324 47 428 47Q499 47 546 80Q559 170 578 211Q583 226 598 226H635Z"/>
+  </g>
+</svg>

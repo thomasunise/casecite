@@ -1,0 +1,18 @@
+# Code ownership for review routing (SOC 2 CC8.1 change management).
+# Every PR requires review from the owners below. Configure branch protection
+# on `master` to require CODEOWNERS review + passing CI before merge.
+
+# Default owner for everything.
+*                           @thomasunise
+
+# Security-sensitive areas warrant extra scrutiny.
+/backend/app/middleware/    @thomasunise
+/backend/app/services/auth.py        @thomasunise
+/backend/app/services/encryption.py  @thomasunise
+/backend/app/services/key_storage.py @thomasunise
+/backend/app/routers/auth.py         @thomasunise
+/backend/app/utils/safe_fetch.py     @thomasunise
+/backend/migrations/        @thomasunise
+/.github/                   @thomasunise
+/Dockerfile                 @thomasunise
+/docker-compose*.yml        @thomasunise

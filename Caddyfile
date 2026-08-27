@@ -1,0 +1,62 @@
+# Caddyfile - Automatic HTTPS reverse proxy
+# Replace demo.yourdomain.com with your actual domain
+
+{$DOMAIN:localhost} {
+    # Cap request bodies (matches nginx.unified.conf client_max_body_size 100M
+    # and the backend's max_upload_size)
+    request_body {
+        max_size 100MB
+    }
+
+    # API proxy to backend
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Health check endpoint
+    handle /health {
+        reverse_proxy backend:8000
+    }
+
+    # Ready check endpoint
+    handle /ready {
+        reverse_proxy backend:8000
+    }
+
+    # Metrics endpoint
+    handle /metrics {
+        reverse_proxy backend:8000
+    }
+
+    # SPA: serve the built frontend, falling back to index.html for client-side
+    # routes (e.g. /drafting) so deep links and refreshes don't 404.
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+
+    # Enable compression
+    encode gzip zstd
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # Mirrors the backend CSP (middleware/security.py): Google Sign-In +
+        # Picker + Dropbox Chooser scripts; no CDNs.
+        Content-Security-Policy "default-src 'self'; script-src 'self' https://accounts.google.com https://apis.google.com https://www.dropbox.com https://cdn01.boxcdn.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com https://cdn01.boxcdn.net; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://api.openai.com https://api.anthropic.com https://login.microsoftonline.com https://accounts.google.com https://apis.google.com https://www.googleapis.com https://api.box.com https://upload.box.com; frame-src 'self' blob: https://accounts.google.com https://docs.google.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+        -Server
+    }
+
+    # Logs
+    log {
+        output file /data/access.log {
+            roll_size 10mb
+            roll_keep 5
+        }
+    }
+}

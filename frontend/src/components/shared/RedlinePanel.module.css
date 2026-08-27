@@ -1,0 +1,232 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.count {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--gray-600);
+}
+
+.exportBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.exportBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sectionTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  margin: 8px 0 3px;
+}
+
+.chip,
+.chipRejected,
+.chipAccepted {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 9px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  background: white;
+  color: var(--gray-800);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.chip:hover {
+  border-color: var(--red-500);
+}
+
+.chipRejected {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.chipAccepted {
+  border-color: var(--green-500);
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.chipText {
+  flex: 1;
+  min-width: 0;
+}
+
+.sevDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+  background: var(--gray-400);
+}
+
+.dot_critical { background: var(--red-600); }
+.dot_major { background: var(--amber-500); }
+.dot_minor { background: var(--gray-400); }
+
+.checkIcon {
+  color: var(--green-600);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.plusIcon {
+  color: var(--green-600);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.insert,
+.insertRejected {
+  border: 1px dashed var(--green-500);
+  border-radius: 8px;
+  background: var(--green-50);
+}
+
+.insertRejected {
+  border-color: var(--gray-300);
+  background: transparent;
+  opacity: 0.6;
+}
+
+.insertHead {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 9px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--green-700);
+  cursor: pointer;
+}
+
+.insertRejected .insertHead {
+  color: var(--gray-500);
+  text-decoration: line-through;
+}
+
+.insertBody {
+  padding: 0 9px 9px;
+}
+
+.insertWhy {
+  font-size: 11px;
+  color: var(--gray-600);
+  line-height: 1.45;
+  margin: 0 0 6px;
+}
+
+.insertProposed {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gray-800);
+  background: white;
+  border-left: 3px solid var(--green-500);
+  border-radius: 5px;
+  padding: 7px 9px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.insertActions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.accept, .acceptActive, .reject, .rejectActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+}
+
+.acceptActive {
+  background: var(--green-50);
+  border-color: var(--green-500);
+  color: var(--green-700);
+}
+
+.rejectActive {
+  background: var(--red-50);
+  border-color: var(--red-500);
+  color: var(--red-700);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gray-500);
+  line-height: 1.5;
+}
+
+.emptyIcon {
+  color: var(--gray-300);
+}
+
+.spin {
+  animation: rlpSpin 1s linear infinite;
+}
+
+@keyframes rlpSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.chipActive {
+  outline: 2px solid var(--gray-900);
+  outline-offset: 1px;
+}

@@ -1,0 +1,53 @@
+/* ============================================================
+   MOBILE SIDEBAR TOGGLE BUTTONS
+   ============================================================ */
+.mobile-sidebar-toggle {
+  display: none;
+  position: fixed;
+  z-index: 1100;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--gray-600);
+  transition: all 0.2s;
+}
+.mobile-sidebar-toggle:hover {
+  background: var(--gray-100);
+}
+.mobile-sidebar-toggle.left-toggle {
+  left: 12px;
+  bottom: 12px;
+}
+.mobile-sidebar-toggle.right-toggle {
+  right: 12px;
+  bottom: 12px;
+}
+
+/* ============================================================
+   MOBILE OVERLAY BACKDROP
+   ============================================================ */
+/* Shown (.active) only under the tablet breakpoint — see responsive.css —
+   so an open-drawer state never blankets the desktop layout. */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(2px);
+  z-index: 999;
+}
+
+/* ============================================================
+   RESPONSIVE CONTAINER UTILITY
+   ============================================================ */
+.responsive-container {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+}

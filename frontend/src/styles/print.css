@@ -1,0 +1,148 @@
+/* ===== Print Styles ===== */
+@media print {
+  /* Page setup */
+  @page {
+    margin: 0.75in;
+    size: auto;
+  }
+
+  /* Reset background and colors for print */
+  *,
+  *::before,
+  *::after {
+    background: white !important;
+    color: black !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body {
+    font-size: 12pt;
+    line-height: 1.5;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* Hide sidebars, navigation, and interactive controls */
+  [data-layout="left-sidebar"],
+  [data-layout="right-panel"],
+  [data-layout="header"],
+  [data-layout="footer"],
+  [data-layout="toasts"] {
+    display: none !important;
+  }
+
+  /* Hide all modals and overlays */
+  [data-modal],
+  [style*="position: fixed"],
+  [style*="position:fixed"] {
+    display: none !important;
+  }
+
+  /* Hide interactive elements */
+  button,
+  input[type="range"],
+  .tab-btn,
+  .tool-card,
+  select,
+  [role="button"] {
+    display: none !important;
+  }
+
+  /* But show text inputs and textareas if they contain content (for reference) */
+  input[type="text"],
+  textarea {
+    border: 1px solid #ccc !important;
+    padding: 4px !important;
+  }
+
+  /* Hide the shortcuts help overlay */
+  [data-shortcuts-overlay] {
+    display: none !important;
+  }
+
+  /* Main content area takes full width */
+  [data-layout="app"] {
+    display: block !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  [data-layout="main-content"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: none !important;
+    display: block !important;
+    overflow: visible !important;
+    min-height: 0 !important;
+  }
+
+  /* Show URLs for links */
+  a[href]::after {
+    content: " (" attr(href) ")";
+    font-size: 0.85em;
+    font-style: italic;
+    color: #555 !important;
+    word-break: break-all;
+  }
+
+  /* Don't show URL for internal anchors or javascript links */
+  a[href^="#"]::after,
+  a[href^="javascript:"]::after,
+  a[href^="mailto:"]::after {
+    content: "";
+  }
+
+  /* Page break controls */
+  h1, h2, h3, h4, h5, h6 {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  p, li, blockquote, pre, code {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Keep headings with their content */
+  h1, h2, h3, h4, h5, h6 {
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* Avoid breaking inside tables */
+  table, figure, img {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Ensure images are visible and sized properly */
+  img {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* Remove animations */
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* Scrollbar reset for print */
+  ::-webkit-scrollbar {
+    display: none !important;
+  }
+
+  /* Remove any overflow hidden that would clip content */
+  div, main, section, article {
+    overflow: visible !important;
+  }
+
+  /* Hide mobile toggles in print */
+  .mobile-sidebar-toggle,
+  .sidebar-overlay {
+    display: none !important;
+  }
+}

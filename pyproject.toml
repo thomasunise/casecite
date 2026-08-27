@@ -1,0 +1,72 @@
+[project]
+name = "casecite"
+version = "1.2.0"
+description = "Enterprise Legal Research RAG Platform"
+license = "Elastic-2.0"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["backend/app"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "S",   # flake8-bandit (security)
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "S101",   # assert used (ok in tests)
+    "S104",   # bind to 0.0.0.0 (intentional for containers)
+    "S105",   # hardcoded password (false positives on enum names like PASSWORD_CHANGE)
+    "S110",   # try-except-pass (used intentionally)
+    "S112",   # try-except-continue (intentional in batch processing)
+    "S311",   # pseudo-random (used for jitter, not crypto)
+    "S608",   # SQL injection (false positives on parameterized queries)
+    "B007",   # unused loop variable (intentional in some patterns)
+    "B008",   # function call in default arg (FastAPI Depends pattern)
+    "B023",   # function uses loop variable (intentional closures)
+    "B904",   # raise without from (existing pattern across codebase)
+    "B905",   # zip without strict (not needed for all cases)
+    "SIM102", # collapsible if (readability preference)
+    "SIM103", # needless bool (readability preference)
+    "SIM105", # suppressible exception (try/except is clearer)
+    "SIM108", # ternary operator (readability preference)
+    "SIM110", # reimplemented builtin (readability preference)
+    "UP042",  # str+Enum (existing convention; StrEnum migration tracked separately)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/*" = ["S101", "S105", "S106", "S107", "S108", "E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+# Single pytest configuration (backend/pytest.ini was a diverging duplicate).
+# Run from backend/: `python -m pytest tests/`. Test env vars are set by
+# backend/tests/conftest.py before the app is imported; CI sets them explicitly.
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --cov=app --cov-branch --cov-fail-under=50"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
