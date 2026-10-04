@@ -63,7 +63,7 @@ aiofiles==23.2.1
 
 # Utils
 # 1.2.2 clears PYSEC-2026-2270
-python-dotenv==1.2.2
+python-dotenv==1.2.4
 # fastapi 0.139 requires pydantic>=2.9
 pydantic[email]==2.13.4
 pydantic-settings==2.14.2
