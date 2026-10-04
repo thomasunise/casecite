@@ -9,7 +9,7 @@
 # reproducible build, replace the tags with `image@sha256:<digest>` (resolve
 # with `docker buildx imagetools inspect <image>`); Dependabot's docker
 # ecosystem (.github/dependabot.yml) will then propose digest bumps.
-FROM node:20-slim AS frontend-build
+FROM node:26-slim AS frontend-build
 
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json* ./
