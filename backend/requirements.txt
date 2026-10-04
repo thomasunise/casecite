@@ -10,7 +10,7 @@ PyJWT[crypto]==2.15.0
 
 # RAG and AI
 openai==1.12.0
-anthropic==0.18.1
+anthropic==1.11.0
 # Gemini: the code imports the NEW SDK (`from google import genai` in
 # app/services/user_keys.py); the legacy google-generativeai package was pinned
 # but never imported. 1.2.x is the newest google-genai line that does not force
