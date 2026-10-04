@@ -2,12 +2,6 @@
 Unit tests for the Branding service.
 """
 
-import os
-
-os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
-os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
-os.environ["DEBUG"] = "true"
-
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -204,12 +198,11 @@ class TestBrandingService:
             patch("app.services.branding.get_db_context", return_value=mock_ctx),
             patch("os.makedirs"),
             patch("builtins.open", m_open),
-            patch("app.services.branding.settings") as mock_settings,
         ):
-            mock_settings.upload_dir = "/tmp/uploads"
             url = await upload_logo(b"PNG_DATA", "image/png")
 
-        assert url.startswith("/static/uploads/brand_logo_")
+        # Served by GET /api/v1/branding/assets/<name> — a route that exists.
+        assert url.startswith("/api/v1/branding/assets/brand_logo_")
         assert url.endswith(".png")
         m_open.assert_called_once()
         assert row.logo_url == url
@@ -286,3 +279,71 @@ class TestBrandingService:
         assert row.accent_color == DEFAULT_BRANDING["accent_color"]
         assert row.favicon_url == DEFAULT_BRANDING["favicon_url"]
         assert row.custom_css == DEFAULT_BRANDING["custom_css"]
+
+
+class TestBrandingAssets:
+    """Uploaded logos live in their own directory and are resolvable by name."""
+
+    @pytest.mark.asyncio
+    async def test_upload_writes_outside_the_document_upload_dir(self, tmp_path):
+        from app.services import branding
+
+        row = MagicMock()
+        row.logo_url = None
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.first.return_value = row
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_db)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        asset_dir = tmp_path / "branding"
+        with (
+            patch.object(branding, "BRANDING_ASSET_DIR", asset_dir),
+            patch.object(branding, "get_db_context", return_value=mock_ctx),
+        ):
+            first = await branding.upload_logo(b"first", "image/png")
+            name = first.rsplit("/", 1)[1]
+            assert (asset_dir / name).read_bytes() == b"first"
+            assert branding.resolve_asset_path(name) == asset_dir / name
+
+            # Replacing the logo removes the previous file.
+            second = await branding.upload_logo(b"second", "image/webp")
+            assert not (asset_dir / name).exists()
+            assert (asset_dir / second.rsplit("/", 1)[1]).read_bytes() == b"second"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../.user_keys.json",
+            "..%2f.instance_secrets.json",
+            "index.json",
+            "brand_logo_zzzzzzzz.png",
+            "brand_logo_0123abcd.exe",
+            "brand_logo_0123abcd.png/../../x",
+            "",
+        ],
+    )
+    def test_resolve_rejects_anything_but_generated_names(self, name, tmp_path):
+        from app.services import branding
+
+        with patch.object(branding, "BRANDING_ASSET_DIR", tmp_path):
+            assert branding.resolve_asset_path(name) is None
+
+    def test_legacy_logo_url_is_mapped_to_the_served_route(self, tmp_path):
+        """Logos saved under the old, never-served /static/uploads/ URL still load."""
+        from app.services import branding
+
+        (tmp_path / "brand_logo_0123abcd.png").write_bytes(b"x")
+        with patch.object(branding, "BRANDING_ASSET_DIR", tmp_path):
+            assert (
+                branding._public_logo_url("/static/uploads/brand_logo_0123abcd.png")
+                == "/api/v1/branding/assets/brand_logo_0123abcd.png"
+            )
+            # A legacy URL whose file is gone is dropped rather than left broken.
+            assert branding._public_logo_url("/static/uploads/brand_logo_ffffffff.png") is None
+        assert branding._public_logo_url("https://cdn.example.com/logo.png") == (
+            "https://cdn.example.com/logo.png"
+        )
+        assert branding._public_logo_url(None) is None

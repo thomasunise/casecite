@@ -3,7 +3,6 @@ export type {
   Citation,
   ChatStats,
   ChatMessage,
-  SessionStats,
 } from './research';
 
 export type {
@@ -44,5 +43,4 @@ export type {
 export type {
   CaseInfo,
   CaseMessage,
-  CaseComparisonData,
 } from './case';

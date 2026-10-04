@@ -28,10 +28,6 @@ Object.assign(api, {
     return api.request(`/documents/${documentId}`, { method: 'DELETE' });
   },
 
-  async reindexDocuments(): Promise<MessageResponse> {
-    return api.request('/settings/reindex', { method: 'POST' });
-  },
-
   // ── Knowledge-base folders ──────────────────────────────────────
   async listFolders(): Promise<{ folders: string[] }> {
     return api.request('/documents/folders');

@@ -208,8 +208,18 @@ Nominated by President in 2015.
         from app.services.judge_intel import judge_intel
 
         opinions = [
-            {"id": 1, "case_name": "Old but famous", "date_filed": "2001-01-01", "citation_count": 900},
-            {"id": 2, "case_name": "New and obscure", "date_filed": "2024-01-01", "citation_count": 1},
+            {
+                "id": 1,
+                "case_name": "Old but famous",
+                "date_filed": "2001-01-01",
+                "citation_count": 900,
+            },
+            {
+                "id": 2,
+                "case_name": "New and obscure",
+                "date_filed": "2024-01-01",
+                "citation_count": 1,
+            },
             {"id": 3, "case_name": "Middling", "date_filed": "2010-01-01", "citation_count": 50},
         ]
         mock_cache = MagicMock()
@@ -282,3 +292,118 @@ Nominated by President in 2015.
             )
 
             assert result is not None
+
+
+class TestWikipediaIdentity:
+    """A namesake's biography must never be attached to a judge."""
+
+    def test_title_must_name_the_person_not_just_share_a_surname(self):
+        from app.services.judge_intel._wikipedia import title_matches_judge
+
+        assert title_matches_judge("John Roberts", "John Roberts")
+        assert title_matches_judge("John G. Roberts Jr.", "John Roberts")
+        assert title_matches_judge("Sonia Sotomayor", "Sonia Sotomayor")
+        assert title_matches_judge("John Smith (judge)", "John Smith")
+        # Same surname, different person.
+        assert not title_matches_judge("Julia Roberts", "John Roberts")
+        assert not title_matches_judge("Roberts Court", "John Roberts")
+        assert not title_matches_judge("List of federal judges", "John Roberts")
+
+    def test_intro_must_describe_a_judge(self):
+        from app.services.judge_intel._wikipedia import intro_describes_judge
+
+        judge = "John Smith (born May 1, 1950) is a United States district judge of the ..."
+        actor = "John Smith (born May 1, 1950) is an American actor and comedian."
+        assert intro_describes_judge(judge)
+        assert not intro_describes_judge(actor)
+        assert not intro_describes_judge("")
+        assert not intro_describes_judge(None)
+
+    def test_known_birth_year_must_agree_with_the_page(self):
+        from app.services.judge_intel._wikipedia import intro_describes_judge
+
+        intro = "John Smith (March 3, 1890 – June 9, 1961) was a judge of the Court of Appeals."
+        assert intro_describes_judge(intro, birth_year=1890)
+        assert not intro_describes_judge(intro, birth_year=1950)
+        # A page that states no dates cannot be contradicted by one.
+        assert intro_describes_judge("John Smith is a state court judge.", birth_year=1950)
+
+    @pytest.mark.asyncio
+    async def test_namesake_page_yields_no_biography(self):
+        from app.services.judge_intel import judge_intel
+
+        def response(payload):
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = payload
+            return resp
+
+        search = response(
+            {"query": {"search": [{"title": "Julia Roberts"}, {"title": "John Roberts (actor)"}]}}
+        )
+        actor_intro = response(
+            {
+                "query": {
+                    "pages": {"7": {"extract": "John Roberts (born 1971) is an American actor."}}
+                }
+            }
+        )
+        client = AsyncMock()
+        client.get = AsyncMock(side_effect=[search, actor_intro])
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.services.judge_intel._wikipedia.httpx.AsyncClient", return_value=cm):
+            result = await judge_intel.fetch_wikipedia_data("John Roberts")
+
+        assert result["url"] is None
+        assert result["summary"] is None
+        assert result["bio"] is None
+        # The surname-only hit was never fetched; only the name match was checked.
+        assert client.get.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_confirmed_judge_page_is_used(self):
+        from app.services.judge_intel import judge_intel
+
+        def response(payload):
+            resp = MagicMock(status_code=200)
+            resp.json.return_value = payload
+            return resp
+
+        intro = "John Glover Roberts Jr. (born January 27, 1955) is an American jurist."
+        full = intro + "\n\n== Early life ==\nBorn in Buffalo.\n"
+        client = AsyncMock()
+        client.get = AsyncMock(
+            side_effect=[
+                response({"query": {"search": [{"title": "John Roberts"}]}}),
+                response({"query": {"pages": {"1": {"extract": intro}}}}),
+                response({"query": {"pages": {"1": {"extract": full}}}}),
+            ]
+        )
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=client)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("app.services.judge_intel._wikipedia.httpx.AsyncClient", return_value=cm):
+            result = await judge_intel.fetch_wikipedia_data("John Roberts", birth_year=1955)
+
+        assert result["url"] == "https://en.wikipedia.org/wiki/John_Roberts"
+        assert result["summary"] == intro
+        assert "Buffalo" in result["early_life"]
+
+
+class TestMethodologyMatchesTheCode:
+    def test_no_methodology_for_metrics_that_are_not_computed(self):
+        from app.services.judge_intel import judge_intel
+
+        methodology = judge_intel.get_metrics_methodology()
+        assert "party_win_rates" not in methodology
+
+    def test_citation_score_does_not_claim_normalisation_against_peers(self):
+        from app.services.judge_intel import judge_intel
+
+        entry = judge_intel.get_metrics_methodology()["citation_impact_score"]
+        assert "Normalized against judges" not in entry["calculation"]
+        assert "35" in entry["calculation"]
+        assert "NOT normalized" in entry["limitations"]

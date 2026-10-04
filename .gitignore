@@ -49,6 +49,12 @@ logs/
 # Docker
 *.tar
 
+# Backups written by scripts/backup_database.sh (database dumps and data
+# archives contain client data, password hashes and the key store)
+backups/
+*.sql.gz*
+*.tar.gz*
+
 # User settings (runtime data)
 user_settings/
 

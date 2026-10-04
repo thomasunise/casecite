@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from cryptography.exceptions import InvalidTag
 
 from app.config import settings
 from app.models.schemas import ConnectorType
@@ -21,6 +22,18 @@ logger = logging.getLogger(__name__)
 _connector_user_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "_connector_user_ctx", default=None
 )
+
+
+class ConnectorError(RuntimeError):
+    """A connector could not complete a provider call (auth lost, bad response)."""
+
+
+class FileTooLargeError(ValueError):
+    """A remote file exceeds the instance upload size limit."""
+
+
+# Legacy global credential files already reported in the log (once per process).
+_legacy_warned: set[str] = set()
 
 
 @dataclass
@@ -47,6 +60,17 @@ class BaseConnector(ABC):
     """
 
     connector_type: ConnectorType = None
+
+    # Whether ``list_files(folder_id)`` can scope a crawl to one folder. A
+    # connector that only has a flat listing sets this False so a folder-scoped
+    # sync is refused instead of silently importing the whole account.
+    supports_folder_sync: bool = True
+
+    # True for connectors that authenticate with one firm-wide credential
+    # rather than a per-user OAuth grant. The router only lets users holding
+    # ``admin.settings`` use them, since the credential carries the access of
+    # the whole firm rather than of the person syncing.
+    requires_admin: bool = False
 
     def __init__(self):
         # Per-user credential cache: {user_id: {cred dict}}
@@ -103,7 +127,7 @@ class BaseConnector(ABC):
             try:
                 decrypted = encryption_service.decrypt_string(encrypted_data)
                 return json.loads(decrypted)
-            except (ValueError, KeyError, ConnectionError, TimeoutError, OSError):
+            except (ValueError, KeyError, ConnectionError, TimeoutError, OSError, InvalidTag):
                 # Legacy unencrypted file – migrate silently
                 try:
                     creds = json.loads(encrypted_data)
@@ -143,30 +167,27 @@ class BaseConnector(ABC):
     # ------------------------------------------------------------------
 
     def _load_credentials_for_user(self, user_id: str) -> dict[str, Any]:
-        """Load credentials for *user_id*, migrating legacy file if needed."""
-        # 1. Try user-scoped file
-        path = self._get_credentials_path(user_id)
-        creds = self._read_credentials_file(path)
+        """Load the user-scoped credentials for *user_id*.
+
+        A pre-isolation global ``credentials_<type>.json`` is never adopted:
+        it holds one account's tokens with no record of whose they were, so
+        handing it to whichever user happened to load first would give that
+        user someone else's drive. It is left on disk untouched and reported
+        once so an administrator can remove it; users reconnect via OAuth.
+        """
+        creds = self._read_credentials_file(self._get_credentials_path(user_id))
         if creds:
             return creds
 
-        # 2. One-time migration from legacy global file
         legacy_path = self._get_legacy_credentials_path()
-        if os.path.exists(legacy_path):
-            creds = self._read_credentials_file(legacy_path)
-            if creds:
-                # Persist under the user-scoped path
-                self._write_credentials_file(path, creds)
-                # Remove the global file so it can't be claimed by another user
-                try:
-                    os.remove(legacy_path)
-                except OSError:
-                    pass
-                logger.info(
-                    f"Migrated global credentials for {self.connector_type.value} "
-                    f"to user-scoped file for user {self._safe_user_id(user_id)}"
-                )
-                return creds
+        if legacy_path not in _legacy_warned and os.path.exists(legacy_path):
+            _legacy_warned.add(legacy_path)
+            logger.warning(
+                "Ignoring legacy global credentials file for %s (%s): it is not tied "
+                "to a user. Delete it and have each user reconnect the connector.",
+                self.connector_type.value,
+                os.path.basename(legacy_path),
+            )
 
         return {}
 
@@ -263,10 +284,36 @@ class BaseConnector(ABC):
         """Download a file's content."""
         pass
 
+    async def _download_capped(
+        self, client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
+    ) -> bytes:
+        """Stream a provider download, refusing bodies over the upload limit.
+
+        Checked against the declared Content-Length first and then while
+        reading, so an oversized (or mis-declared) file is never buffered whole.
+        """
+        max_bytes = settings.max_upload_size
+        async with client.stream(method, url, **kwargs) as response:
+            response.raise_for_status()
+            declared = response.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise FileTooLargeError(f"File exceeds the {max_bytes}-byte upload limit")
+            chunks = bytearray()
+            async for chunk in response.aiter_bytes():
+                chunks.extend(chunk)
+                if len(chunks) > max_bytes:
+                    raise FileTooLargeError(f"File exceeds the {max_bytes}-byte upload limit")
+            return bytes(chunks)
+
     async def crawl_all_files(
-        self, supported_types: list[str] = None
+        self, supported_types: list[str] = None, folder_id: str | None = None
     ) -> AsyncGenerator[FileInfo, None]:
-        """Crawl all files recursively."""
+        """Crawl files recursively, starting at *folder_id* (root when None)."""
+        if folder_id and not self.supports_folder_sync:
+            raise ConnectorError(
+                f"{self.connector_type.value} cannot sync a single folder; "
+                "only a full-account sync is available."
+            )
         if supported_types is None:
             supported_types = [
                 "application/pdf",
@@ -275,7 +322,7 @@ class BaseConnector(ABC):
                 "text/plain",
             ]
 
-        async for file_info in self._crawl_folder(None, supported_types):
+        async for file_info in self._crawl_folder(folder_id, supported_types):
             yield file_info
 
     async def _crawl_folder(
@@ -304,7 +351,15 @@ class BaseConnector(ABC):
             page_token = next_token
 
     async def disconnect(self):
-        """Disconnect and clear credentials."""
+        """Disconnect: revoke the provider grant where possible, then clear credentials.
+
+        Revocation is best-effort and never blocks the local deletion — a
+        provider outage must not leave tokens on disk after the user asked to
+        disconnect.
+        """
+        creds = dict(self.credentials)
+        if creds:
+            await _revoke_token_best_effort(self.connector_type, creds)
         self._clear_credentials()
 
     async def get_status(self) -> dict[str, Any]:
@@ -326,7 +381,16 @@ class BaseConnector(ABC):
                 "account_email": account.get("email"),
                 "last_sync": self.credentials.get("last_sync"),
             }
-        except (httpx.HTTPError, ConnectionError, TimeoutError):
+        except (
+            httpx.HTTPError,
+            ConnectorError,
+            ConnectionError,
+            TimeoutError,
+            KeyError,
+            ValueError,
+        ):
+            # Includes an expired grant that can no longer be refreshed: report
+            # "not connected" instead of failing the whole connector list.
             return {
                 "connected": False,
                 "configured": True,
@@ -355,7 +419,7 @@ def _read_credentials_at(path: str) -> dict[str, Any]:
             return {}
         try:
             return json.loads(encryption_service.decrypt_string(raw))
-        except (ValueError, KeyError, TypeError, OSError):
+        except (ValueError, KeyError, TypeError, OSError, InvalidTag):
             return json.loads(raw)  # legacy unencrypted file
     except (OSError, ValueError, TypeError):
         return {}
@@ -367,8 +431,12 @@ async def _revoke_token_best_effort(connector_type: ConnectorType, creds: dict[s
     Google: POST oauth2.googleapis.com/revoke with the refresh token (falls back
     to the access token); revoking either invalidates the whole grant.
     Dropbox: POST /2/auth/token/revoke with the bearer access token, which also
-    disables the paired refresh token. Other providers have no comparably cheap
-    endpoint, so their files are just deleted. Failures are logged, not raised.
+    disables the paired refresh token.
+    Box: POST api.box.com/oauth2/revoke with the app's client credentials and
+    the refresh token (falls back to the access token); revoking either
+    invalidates the pair. Other providers have no comparably cheap endpoint
+    (Microsoft only offers revoking every session of the user), so their files
+    are just deleted. Failures are logged, not raised.
     """
     try:
         if connector_type in (ConnectorType.GOOGLE_DRIVE, ConnectorType.GOOGLE_PICKER):
@@ -387,6 +455,19 @@ async def _revoke_token_best_effort(connector_type: ConnectorType, creds: dict[s
                 resp = await client.post(
                     "https://api.dropboxapi.com/2/auth/token/revoke",
                     headers={"Authorization": f"Bearer {token}"},
+                )
+        elif connector_type in (ConnectorType.BOX, ConnectorType.BOX_PICKER):
+            from app.services import connector_credentials
+
+            token = creds.get("refresh_token") or creds.get("access_token")
+            client_id = connector_credentials.get("box_client_id")
+            client_secret = connector_credentials.get("box_client_secret")
+            if not (token and client_id and client_secret):
+                return False
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    "https://api.box.com/oauth2/revoke",
+                    data={"client_id": client_id, "client_secret": client_secret, "token": token},
                 )
         else:
             return False

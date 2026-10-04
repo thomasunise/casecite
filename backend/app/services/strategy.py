@@ -10,6 +10,10 @@ first-chunk fallback for any document the search missed), and a single
 utility-LLM call synthesizes a position with strengths, weaknesses and next
 steps — each point citing server-assigned passage refs that are joined back to
 real citations in code, so the model can never invent a source.
+
+The brief is built from the most relevant passages of each document, not from
+a full read of every document; the payload's ``scope`` says exactly how much
+was read so the UI never has to imply otherwise.
 """
 
 from __future__ import annotations
@@ -35,12 +39,18 @@ logger = logging.getLogger(__name__)
 # Bounds keep cost and latency predictable.
 MAX_DOCUMENTS = 25
 CHUNKS_PER_DOCUMENT = 3
+# Shown with a citation. The synthesis itself reads the whole passage.
 SNIPPET_MAX_CHARS = 400
+# A stored chunk is ~512 tokens; this keeps all of it. The synthesis prompt
+# gives each passage an equal share of SYNTHESIS_BUDGET_CHARS, up to this.
+PASSAGE_MAX_CHARS = 4_000
+SYNTHESIS_BUDGET_CHARS = 150_000
 # Case-law support stage: every strength/weakness point is restated as a legal
-# proposition, searched on CourtListener, and each candidate opinion is read in
-# FULL — however long — in judge windows until a supporting quote verifies
-# verbatim against the real opinion text or the opinion is exhausted. Case law
-# is never trusted from the model.
+# proposition, searched on CourtListener, and each candidate opinion is read
+# window by window (up to case_law_research.MAX_WINDOWS_PER_OPINION windows —
+# every ordinary opinion in full) until a supporting quote verifies verbatim
+# against the real opinion text or the windows run out. An opinion too long to
+# finish is counted as partially read. Case law is never trusted from the model.
 MAX_CASE_LAW_POINTS = 8
 CASE_LAW_CANDIDATES_PER_POINT = 4
 CASE_LAW_KEPT_PER_POINT = 3
@@ -110,6 +120,7 @@ def build_passages(
                     "document_id": doc_id,
                     "filename": filename,
                     "snippet": text[:SNIPPET_MAX_CHARS],
+                    "text": text[:PASSAGE_MAX_CHARS],
                     "score": float(chunk.get("similarity") or 0.0),
                 }
             )
@@ -228,7 +239,16 @@ class StrategyService:
         return grouped
 
     async def _synthesize(self, client, question: str, passages: list[dict[str, Any]]) -> dict:
-        lines = [f"[{p['ref']}] ({p['filename']}) {p['snippet']}" for p in passages]
+        # The model reads each passage in full (a 400-character opening is not
+        # enough to assess a clause); only when the scope is very large does
+        # every passage shrink, equally, to fit the budget.
+        per_passage = max(
+            SNIPPET_MAX_CHARS, min(PASSAGE_MAX_CHARS, SYNTHESIS_BUDGET_CHARS // len(passages))
+        )
+        lines = [
+            f"[{p['ref']}] ({p['filename']}) {(p.get('text') or p['snippet'])[:per_passage]}"
+            for p in passages
+        ]
         prompt = (
             "You are a senior litigation strategist. Using ONLY the passages below from the "
             "client's own documents, assess the client's position on the question.\n\n"
@@ -252,13 +272,6 @@ class StrategyService:
         )
         return json.loads(resp.choices[0].message.content or "{}")
 
-    @staticmethod
-    def _opinion_windows(text: str) -> list[str]:
-        return case_law_research.opinion_windows(text)
-
-    def _verify_quote(self, text: str, quote: str) -> tuple[int, int] | None:
-        return case_law_research.verify_quote(text, quote)
-
     async def _read_and_judge_candidate(
         self,
         client,
@@ -267,36 +280,19 @@ class StrategyService:
         point_text: str,
         proposition: str,
         opinion,
-    ) -> tuple[dict[str, Any] | None, str]:
-        """Read one opinion IN FULL and decide whether it supports the proposition.
+    ) -> tuple[dict[str, Any] | None, case_law_research.OpinionVerdict]:
+        """Read one opinion and decide whether it supports the proposition.
 
-        The full text is judged window by window until the judge endorses the
-        opinion with a verbatim quote that ``find_quote_offset`` can locate in
-        the real opinion text. An opinion the judge endorses but cannot ground
-        in its own text is dropped — that is exactly the hallucination this
-        stage exists to stop. Never raises.
+        The text is judged window by window until the judge endorses the
+        opinion with a verbatim quote that verifies against the real opinion
+        text (see ``case_law_research.judge_opinion``). Never raises.
 
-        Returns (authority, reason): authority is None unless reason is
-        "attached"; reason is one of "attached", "unreadable", "unsupportive",
-        "quote_unverified", "error".
+        Returns (authority, verdict): authority is None unless the verdict's
+        reason is "attached".
         """
-        try:
-            full = await courtlistener_service.get_opinion(opinion.id)
-        except Exception as e:  # per-candidate, never fails the brief
-            logger.warning(f"Strategy case-law opinion fetch failed ({opinion.id}): {e}")
-            return None, "unreadable"
-        text = (getattr(full, "text", None) or "") if full else ""
-        if not text.strip():
-            logger.warning(
-                f"Strategy case-law candidate unreadable — opinion {opinion.id} "
-                f"({opinion.case_name}) has no usable text"
-            )
-            return None, "unreadable"
 
-        windows = self._opinion_windows(text)
-        endorsed_but_unverified = False
-        for index, window in enumerate(windows):
-            prompt = (
+        def build_prompt(part: str, block: str) -> str:
+            return (
                 "You are selecting legal authority for a litigation strategy brief.\n\n"
                 f"OUR POSITION: {position[:600]}\n\n"
                 f"POINT IN THE BRIEF: {point_text[:400]}\n\n"
@@ -304,8 +300,8 @@ class StrategyService:
                 f"CASE: {opinion.case_name}"
                 f"{' (' + opinion.citation[0] + ')' if opinion.citation else ''}\n"
                 f"{UNTRUSTED_CONTENT_RULE}\n\n"
-                f"OPINION TEXT (part {index + 1} of {len(windows)}):\n"
-                f"{untrusted_block(f'Opinion text, part {index + 1} of {len(windows)}', window)}"
+                f"OPINION TEXT ({part}):\n"
+                f"{block}"
                 "\n\n"
                 "Does this part of the opinion state a rule of law, holding, or "
                 "reasoning that a lawyer could legitimately cite in support of "
@@ -317,48 +313,36 @@ class StrategyService:
                 '"quote": "ONE contiguous passage of 1-3 sentences copied EXACTLY, character for character, from the opinion text above, stating the rule or holding — or empty", '
                 '"how": "one sentence on how a lawyer would use this authority for the proposition, or empty"}'
             )
-            try:
-                async with semaphore:
-                    resp = await openai_chat(
-                        client,
-                        model=utility_model(),
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.0,
-                        response_format={"type": "json_object"},
-                    )
-                data = json.loads(resp.choices[0].message.content or "{}")
-            except Exception as e:  # per-candidate, never fails the brief
-                logger.warning(f"Strategy case-law judge call failed ({opinion.id}): {e}")
-                return None, "error"
-            if not (isinstance(data, dict) and data.get("supports")):
-                continue
 
-            quote = str(data.get("quote") or "").strip()
-            offsets = self._verify_quote(text, quote)
-            if offsets is None:
-                # Endorsed but ungrounded in THIS window — keep scanning: a
-                # later part of the opinion may yield a verifiable quote.
-                endorsed_but_unverified = True
-                logger.info(
-                    f"Strategy case-law quote not verifiable in opinion "
-                    f"{opinion.id} ({opinion.case_name}), window {index + 1}/"
-                    f"{len(windows)}"
-                )
-                continue
-            verified_quote = text[offsets[0] : offsets[1]]
+        verdict = await case_law_research.judge_opinion(
+            client,
+            semaphore,
+            opinion,
+            build_prompt=build_prompt,
+            endorse_key="supports",
+            label="Strategy case-law",
+        )
+        if verdict.reason != "attached":
+            return None, verdict
 
-            return {
-                "type": "case_law",
-                "source": opinion.case_name,
-                "reference": opinion.citation[0] if opinion.citation else None,
-                "opinionId": str(opinion.id),
-                "url": opinion.absolute_url,
-                "passage": verified_quote[:600],
-                "explanation": str(data.get("how") or "").strip() or None,
-                "verified": True,
-            }, "attached"
-
-        return None, "quote_unverified" if endorsed_but_unverified else "unsupportive"
+        explanation = str(verdict.data.get("how") or "").strip() or None
+        if explanation:
+            # Model prose about this authority may only name this authority.
+            explanation, _ = case_law_research.redact_unverified_case_references(
+                explanation,
+                sources=[verdict.text],
+                case_law_results=[{"metadata": {"case_name": opinion.case_name}}],
+            )
+        return {
+            "type": "case_law",
+            "source": opinion.case_name,
+            "reference": opinion.citation[0] if opinion.citation else None,
+            "opinionId": str(opinion.id),
+            "url": opinion.absolute_url,
+            "passage": verdict.quote[:600],
+            "explanation": explanation,
+            "verified": True,
+        }, verdict
 
     async def _craft_point_targets(
         self, client, position: str, points: list[dict[str, Any]]
@@ -422,8 +406,8 @@ class StrategyService:
         """Attach verified supporting case law to every strength/weakness point.
 
         For each point: restate it as a legal proposition with a doctrine
-        search query, search CourtListener, read each candidate opinion IN
-        FULL (windowed — no length cap), judge whether it supports the
+        search query, search CourtListener, read each candidate opinion
+        window by window (bounded; see ``partially_read``), judge whether it supports the
         proposition, and attach only authorities whose supporting quote
         verifies verbatim against the opinion text. Best-effort enhancement:
         any failure is logged and skipped — case law never blocks the brief.
@@ -442,6 +426,7 @@ class StrategyService:
             "requested": True,
             "points_searched": len(points),
             "opinions_read": 0,
+            "partially_read": 0,
             "attached": 0,
             "unreadable": 0,
             "unsupportive": 0,
@@ -463,6 +448,7 @@ class StrategyService:
         ) -> tuple[dict, list[dict], dict[str, int]]:
             counters = {
                 "opinions_read": 0,
+                "partially_read": 0,
                 "unreadable": 0,
                 "unsupportive": 0,
                 "quote_unverified": 0,
@@ -494,15 +480,17 @@ class StrategyService:
                 )
             )
             kept: list[dict] = []
-            for authority, reason in results:
-                if reason != "unreadable":
+            for authority, verdict in results:
+                if verdict.reason != "unreadable":
                     counters["opinions_read"] += 1
+                if verdict.partial:
+                    counters["partially_read"] += 1
                 if authority is not None:
                     kept.append(authority)
-                elif reason == "error":
+                elif verdict.reason == "error":
                     counters["errors"] += 1
                 else:
-                    counters[reason] += 1
+                    counters[verdict.reason] += 1
             return point, kept[:CASE_LAW_KEPT_PER_POINT], counters
 
         # Attach as each point completes (not after ALL complete): if the stage
@@ -576,6 +564,28 @@ class StrategyService:
             ) from e
 
         sections, citations = join_citations(llm_data, passages)
+        # The synthesis is told to use only the client's passages, but it is
+        # still a model: any case it names that is not in those passages (or
+        # the question) came from its own weights and is removed. Verified
+        # authority is attached separately, below.
+        guard_sources = [question] + [p.get("text") or p["snippet"] for p in passages]
+        removed: list[str] = []
+        sections["position"], gone = case_law_research.redact_unverified_case_references(
+            sections["position"], sources=guard_sources
+        )
+        removed += gone
+        for key, text_key in (
+            ("strengths", "point"),
+            ("weaknesses", "point"),
+            ("next_steps", "step"),
+        ):
+            for item in sections[key]:
+                item[text_key], gone = case_law_research.redact_unverified_case_references(
+                    item[text_key], sources=guard_sources
+                )
+                removed += gone
+        if removed:
+            logger.info(f"Strategy brief: removed {len(removed)} unverified case reference(s)")
         case_law_status = None
         if include_case_law:
             # Hard time budget: reading candidate opinions in full is real
@@ -595,6 +605,7 @@ class StrategyService:
                     "requested": True,
                     "points_searched": 0,
                     "opinions_read": 0,
+                    "partially_read": 0,
                     "attached": sum(
                         len(p.get("case_refs") or [])
                         for p in list(sections["strengths"]) + list(sections["weaknesses"])
@@ -613,7 +624,25 @@ class StrategyService:
                 "folder_path": folder_path,
                 "documents_considered": len(docs),
                 "documents_total": documents_total,
+                # What the synthesis actually read: the most relevant passages
+                # of each document, not every document in full.
+                "passages_read": len(passages),
+                "passages_per_document": CHUNKS_PER_DOCUMENT,
+                "truncated": documents_total > len(docs),
+                "coverage_note": (
+                    f"Synthesised from the {len(passages)} most relevant passages "
+                    f"(up to {CHUNKS_PER_DOCUMENT} per document) of {len(docs)} "
+                    + ("document" if len(docs) == 1 else "documents")
+                    + (
+                        f"; {documents_total - len(docs)} more in scope were not read "
+                        f"(limit of {MAX_DOCUMENTS} per brief)."
+                        if documents_total > len(docs)
+                        else "."
+                    )
+                    + " The documents were not read in full."
+                ),
             },
+            "case_law_removed": removed,
             "position": sections["position"],
             "strengths": sections["strengths"],
             "weaknesses": sections["weaknesses"],

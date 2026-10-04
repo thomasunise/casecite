@@ -105,9 +105,12 @@ class TestDetectFormat:
         fmt = service._detect_format(b"", "", "document.rtf")
         assert fmt == "rtf"
 
-    def test_detect_doc_as_docx(self, service):
-        fmt = service._detect_format(b"", "", "old_document.doc")
-        assert fmt == "docx"
+    def test_detect_legacy_doc(self, service):
+        # Legacy Word binaries have their own extractor; python-docx cannot read them.
+        assert service._detect_format(b"", "", "old_document.doc") == "doc"
+        assert service._detect_format(b"", "application/msword", "") == "doc"
+        ole = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 8
+        assert service._detect_format(ole, "", "no_extension") == "doc"
 
     def test_unknown_defaults_to_txt(self, service):
         fmt = service._detect_format(b"\x00\x01\x02", "", "unknown.xyz")
@@ -136,9 +139,23 @@ class TestExtractTxt:
         text = "R\xe9sum\xe9 of the caf\xe9"
         content = text.encode("latin-1")
         result = service._extract_txt(content)
-        # Should successfully decode (either as utf-8 with errors or latin-1 fallback)
-        assert isinstance(result.text, str)
-        assert len(result.text) > 0
+        assert result.text == text
+
+    def test_cp1252_punctuation_is_decoded(self, service):
+        # Curly quotes and dashes from Windows-authored files live in the
+        # cp1252-only range; they must not come out as control characters.
+        text = "The \u201cTenant\u201d \u2014 pays \u20ac500"
+        result = service._extract_txt(text.encode("cp1252"))
+        assert result.text == text
+
+    def test_non_utf8_without_bom_is_not_read_as_utf16(self, service):
+        # Even-length cp1252 bytes "decode" as UTF-16 into CJK garbage.
+        content = "caf\xe9 au lait".encode("cp1252")
+        assert len(content) % 2 == 0
+        assert service._extract_txt(content).text == "caf\xe9 au lait"
+
+    def test_utf8_bom_is_stripped(self, service):
+        assert service._extract_txt(b"\xef\xbb\xbfHello").text == "Hello"
 
     def test_empty_content(self, service):
         result = service._extract_txt(b"")
@@ -203,6 +220,7 @@ class TestExtract:
         ):
             result = service._extract_pdf(b"%PDF-1.7 fake pdf content")
             assert result.text == ""
+            assert "not installed" in result.error
 
 
 # =============================================================================
@@ -269,3 +287,188 @@ class TestSingleton:
 
     def test_ocr_threshold_default(self):
         assert TextExtractionService.OCR_THRESHOLD == 50
+
+
+# =============================================================================
+# Untrusted-input handling
+# =============================================================================
+
+
+def _zip_bytes(members: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in members.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+class TestUntrustedInput:
+    """A bad upload yields a failed document with a reason, never an exception."""
+
+    def test_corrupt_docx_reports_a_reason(self, service):
+        result = service.extract(file_content=b"PK\x03\x04 not really a zip", filename="a.docx")
+        assert result.text == ""
+        assert "not a valid Office document" in result.error
+
+    def test_zip_valid_but_not_docx_reports_a_reason(self, service):
+        # python-docx raises its own exception types here, not ValueError/OSError.
+        content = _zip_bytes({"hello.txt": b"hi"})
+        result = service.extract(file_content=content, filename="a.docx")
+        assert result.text == ""
+        assert "could not be read as DOCX" in result.error
+
+    def test_corrupt_pdf_reports_a_reason(self, service):
+        result = service.extract(file_content=b"%PDF-1.4 truncated", filename="a.pdf")
+        assert result.text == ""
+        assert "could not be read" in result.error
+
+    def test_corrupt_xlsx_and_pptx_report_a_reason(self, service):
+        for name in ("a.xlsx", "a.pptx"):
+            result = service.extract(file_content=_zip_bytes({"x": b"y"}), filename=name)
+            assert result.text == ""
+            assert result.error
+
+    def test_decompression_bomb_is_rejected_before_parsing(self, service):
+        # 2 MB of zeros compresses to ~2 KB; with a 1 MB limit it must be refused.
+        content = _zip_bytes({"word/document.xml": b"\x00" * (2 * 1024 * 1024)})
+        assert len(content) < 16 * 1024
+        with (
+            patch("app.services.text_extraction._MAX_UNCOMPRESSED_BYTES", 1024 * 1024),
+            patch("app.services.text_extraction.DocxDocument") as parser,
+        ):
+            result = service.extract(file_content=content, filename="bomb.docx")
+        parser.assert_not_called()
+        assert "when decompressed" in result.error
+
+    def test_too_many_zip_members_is_rejected(self, service):
+        content = _zip_bytes({f"part{i}.xml": b"x" for i in range(20)})
+        with patch("app.services.text_extraction._MAX_ZIP_MEMBERS", 10):
+            result = service.extract(file_content=content, filename="many.odt")
+        assert "too many internal parts" in result.error
+
+    def test_binary_file_of_unknown_type_is_not_indexed_as_text(self, service):
+        result = service.extract(file_content=b"\x00\x01\x02\x03" * 64, filename="blob.bin")
+        assert result.text == ""
+        assert "not supported" in result.error
+
+    def test_empty_text_file_has_a_reason(self, service):
+        result = service.extract(file_content=b"   ", filename="empty.txt")
+        assert result.error == "The file contains no extractable text."
+
+    def test_scanned_pdf_without_ocr_says_so(self, service):
+        with (
+            patch("app.services.text_extraction.OCR_AVAILABLE", False),
+            patch.object(service, "_extract_pdf", return_value=ExtractionResult(page_count=3)),
+        ):
+            result = service.extract(file_content=b"%PDF-1.7", filename="scan.pdf")
+        assert "scanned" in result.error
+        assert "OCR is not enabled" in result.error
+
+    def test_pdf_page_cap_is_reported_not_silent(self, service):
+        pypdf = pytest.importorskip("pypdf")
+        import io
+
+        writer = pypdf.PdfWriter()
+        for _ in range(4):
+            writer.add_blank_page(width=200, height=200)
+        buf = io.BytesIO()
+        writer.write(buf)
+        with patch("app.services.text_extraction._MAX_PDF_PAGES", 2):
+            result = service._extract_pdf_pypdf(buf.getvalue())
+        assert result.page_count == 4
+        assert result.truncated is True
+        assert "first 2 of 4 pages" in result.warnings[0]
+
+    @pytest.mark.asyncio
+    async def test_extract_async_runs_off_the_event_loop(self, service):
+        import threading
+
+        seen: list[int] = []
+        real = service.extract
+
+        def spy(**kwargs):
+            seen.append(threading.get_ident())
+            return real(**kwargs)
+
+        with patch.object(service, "extract", side_effect=spy):
+            result = await service.extract_async(file_content=b"hello", filename="a.txt")
+        assert result.text == "hello"
+        assert seen and seen[0] != threading.get_ident()
+
+
+class TestLegacyDoc:
+    """Word 97-2003 binary: the piece table is read directly."""
+
+    @staticmethod
+    def _clx(pieces: list[tuple[int, int, bool]], cps: list[int]) -> bytes:
+        """Build a Clx with one leading Prc and a Pcdt of (offset, _, compressed) pieces."""
+        plc = b"".join(cp.to_bytes(4, "little") for cp in cps)
+        for offset, _unused, compressed in pieces:
+            fc = (offset * 2) | 0x40000000 if compressed else offset
+            plc += b"\x00\x00" + fc.to_bytes(4, "little") + b"\x00\x00"
+        prc = b"\x01" + (2).to_bytes(2, "little") + b"\xaa\xbb"
+        return prc + b"\x02" + len(plc).to_bytes(4, "little") + plc
+
+    def test_piece_table_mixes_cp1252_and_utf16_runs(self):
+        from app.services.text_extraction import _read_doc_piece_table
+
+        ansi = "Rent is due \u2014 ".encode("cp1252")
+        wide = "\u5951\u7d04 applies.\r".encode("utf-16-le")
+        word = b"\x00" * 16 + ansi + wide
+        n_ansi, n_wide = len(ansi), len(wide) // 2
+        clx = self._clx(
+            [(16, 0, True), (16 + len(ansi), 0, False)],
+            [0, n_ansi, n_ansi + n_wide],
+        )
+        text = _read_doc_piece_table(word, clx, n_ansi + n_wide)
+        assert text == "Rent is due \u2014 \u5951\u7d04 applies.\r"
+
+    def test_piece_table_stops_at_main_document_text(self):
+        from app.services.text_extraction import _read_doc_piece_table
+
+        body = b"Main text.FOOTNOTE"
+        clx = self._clx([(0, 0, True)], [0, len(body)])
+        assert _read_doc_piece_table(body, clx, 10) == "Main text."
+
+    def test_malformed_piece_table_is_a_clean_error(self):
+        from app.services.text_extraction import ExtractionError, _read_doc_piece_table
+
+        with pytest.raises(ExtractionError):
+            _read_doc_piece_table(b"", b"\x05garbage", 0)
+
+    def test_control_characters_become_plain_text(self):
+        from app.services.text_extraction import _clean_doc_text
+
+        raw = (
+            'Title\rSee \x13 HYPERLINK "https://example.com" \x14the terms\x15 here.\r'
+            "Party\x07Role\x07\x07Acme\x07Landlord\x07\x07"
+        )
+        cleaned = _clean_doc_text(raw)
+        assert cleaned.splitlines()[:2] == ["Title", "See the terms here."]
+        assert "HYPERLINK" not in cleaned
+        assert "Party\tRole" in cleaned and "Acme\tLandlord" in cleaned
+
+    def test_nested_field_instructions_are_dropped(self):
+        from app.services.text_extraction import _clean_doc_text
+
+        raw = "A \x13 IF \x13 PAGE \x142\x15 = 2 \x14shown\x15 Z"
+        assert _clean_doc_text(raw) == "A shown Z"
+
+    def test_non_word_file_named_doc_reports_a_reason(self, service):
+        result = service.extract(file_content=b"just some bytes", filename="letter.doc")
+        assert result.text == ""
+        assert result.error
+
+    def test_docx_saved_with_doc_extension_is_still_read(self, service):
+        docx = pytest.importorskip("docx")
+        import io
+
+        document = docx.Document()
+        document.add_paragraph("Saved with the wrong extension.")
+        buf = io.BytesIO()
+        document.save(buf)
+        result = service.extract(file_content=buf.getvalue(), filename="letter.doc")
+        assert "wrong extension" in result.text

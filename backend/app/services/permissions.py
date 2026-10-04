@@ -56,6 +56,12 @@ PERMISSIONS: list[dict[str, str]] = [
         "group": "Workspace",
     },
     {
+        "key": "matters.manage",
+        "label": "Create & share matters",
+        "description": "Create shared matters and add or remove their members",
+        "group": "Workspace",
+    },
+    {
         "key": "connectors.manage",
         "label": "Manage connectors",
         "description": "Connect, sync, and disconnect cloud document sources",
@@ -102,7 +108,7 @@ PERMISSIONS: list[dict[str, str]] = [
     {
         "key": "admin.settings",
         "label": "Instance settings",
-        "description": "Integrations, connector credentials, branding, reindex & data clearing",
+        "description": "Integrations, connector credentials, and branding",
         "group": "Administration",
     },
 ]
@@ -113,12 +119,17 @@ _NON_ADMIN_KEYS = {k for k in _ALL_KEYS if not k.startswith("admin.")}
 DEFAULT_ROLE_PERMISSIONS: dict[str, set[str]] = {
     "admin": set(_ALL_KEYS),
     "attorney": set(_NON_ADMIN_KEYS),
-    "paralegal": set(_NON_ADMIN_KEYS),
+    # Paralegals work inside matters but do not decide who is on them: creating
+    # and sharing a matter grants colleagues access to privileged documents.
+    "paralegal": _NON_ADMIN_KEYS - {"matters.manage"},
     # Viewer is the read-and-research role by default; an admin can grant more.
     "viewer": {"chat.use", "documents.view", "tools.research", "judge_intel.use"},
 }
 
 # In-process cache of stored overrides; invalidated on every save/reset.
+# Process-local: correct for the supported single-process deployment (main.py
+# refuses UVICORN_WORKERS != 1); a second process would keep serving its stale
+# copy until restarted.
 _overrides: dict[str, set[str]] | None = None
 _loaded = False
 
@@ -231,6 +242,32 @@ def require_permission(key: str):
                 status_code=403,
                 detail=f"Your role does not include permission: {_permission_label(key)}. "
                 "Ask an administrator to grant it in Settings > Users.",
+            )
+        return current_user
+
+    return Depends(checker)
+
+
+def require_any_permission(*keys: str):
+    """FastAPI dependency: authenticated user holding AT LEAST ONE of ``keys``.
+
+    For shared utility endpoints that several features call (e.g. file text
+    extraction used by the viewer, Contracts and Case Citations).
+    """
+    unknown = [k for k in keys if k not in _ALL_KEYS]
+    if not keys or unknown:  # fail at import time, not per-request
+        raise ValueError(f"Unknown permission(s): {unknown or keys}")
+
+    from app.services.auth import get_current_user
+
+    async def checker(current_user=Depends(get_current_user)):
+        perms = await effective_permissions(current_user.roles or [])
+        if not perms.intersection(keys):
+            labels = ", ".join(_permission_label(k) for k in keys)
+            raise HTTPException(
+                status_code=403,
+                detail=f"Your role does not include any of these permissions: {labels}. "
+                "Ask an administrator to grant one in Settings > Users.",
             )
         return current_user
 

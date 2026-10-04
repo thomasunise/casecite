@@ -1,6 +1,7 @@
 import { Icon } from './Icon';
 import { AiNotice } from './AiNotice';
 import type { ToolResultData, CitingCase } from './ToolResultsArea';
+import { safeHttpUrl } from './safeUrl';
 
 interface CitationValidationResultProps {
   s: Record<string, string>;
@@ -42,7 +43,7 @@ function CitationValidationResult({ s, tr }: CitationValidationResultProps) {
         </div>
         <div className={s.validationCitation}>{tr.citation}</div>
         {tr.absolute_url && (
-          <a className={s.validationCaseLink} href={tr.absolute_url} target="_blank" rel="noopener noreferrer">
+          <a className={s.validationCaseLink} href={safeHttpUrl(tr.absolute_url) ?? undefined} target="_blank" rel="noopener noreferrer">
             <Icon name="ExternalLink" size={12} /> Open case on CourtListener
           </a>
         )}
@@ -100,7 +101,7 @@ function CitationValidationResult({ s, tr }: CitationValidationResultProps) {
                 )}
               </div>
               {c.url && (
-                <a href={c.url} target="_blank" rel="noopener noreferrer" title="View on CourtListener">
+                <a href={safeHttpUrl(c.url) ?? undefined} target="_blank" rel="noopener noreferrer" title="View on CourtListener">
                   <Icon name="ExternalLink" size={14} className={s.resultRowLinkIcon} />
                 </a>
               )}

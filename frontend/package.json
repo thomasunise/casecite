@@ -22,6 +22,9 @@
   },
   "dependencies": {
     "@azure/msal-browser": "^3.10.0",
+    "@fontsource/inter": "^5.3.0",
+    "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/source-serif-4": "^5.3.0",
     "lucide-react": "^0.344.0",
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
@@ -37,12 +40,12 @@
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^25.2.3",
     "@types/qrcode": "^1.5.6",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
     "@typescript-eslint/eslint-plugin": "^8.68.0",
     "@typescript-eslint/parser": "^8.68.0",
     "@vitejs/plugin-react": "^4.2.1",
-    "@vitest/coverage-v8": "^4.0.18",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^8.56.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-react": "^7.22.0",
@@ -51,6 +54,6 @@
     "prettier": "^3.2.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
-    "vitest": "^4.0.18"
+    "vitest": "^4.1.11"
   }
 }

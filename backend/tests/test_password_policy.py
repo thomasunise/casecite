@@ -7,11 +7,7 @@ os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
 os.environ["DEBUG"] = "true"
 
 import pytest
-from app.services.password_policy import (
-    PasswordPolicyError,
-    check_password_strength,
-    validate_password,
-)
+from app.services.password_policy import validate_password
 
 
 class TestValidatePassword:
@@ -63,69 +59,28 @@ class TestValidatePassword:
         assert errors == []
 
 
-class TestCheckPasswordStrength:
-    """Tests for check_password_strength returning strength analysis."""
+class TestCommonPasswords:
+    """Passwords that pass the complexity rules but are trivially guessable."""
 
-    def test_weak_password(self):
-        result = check_password_strength("abc")
-        assert result["score"] <= 2
-        assert result["strength"] in ("weak", "very_weak")
-        assert result["valid"] is False
+    @pytest.mark.parametrize(
+        "password",
+        [
+            "Password123!",
+            "P@ssw0rd1234!",
+            "Welcome2024!!",
+            "Admin@123456",
+            "WelcomeSummer2024!",
+            "PasswordPassword1!",
+            "1Password2024!",
+        ],
+    )
+    def test_decorated_common_password_rejected(self, password):
+        errors = validate_password(password)
+        assert any("common" in e.lower() for e in errors), errors
 
-    def test_fair_password(self):
-        result = check_password_strength("Abcdefghijkl")
-        assert isinstance(result["score"], int)
-        assert isinstance(result["strength"], str)
-
-    def test_strong_password(self):
-        result = check_password_strength("MyStr0ng!Pass")
-        assert result["score"] >= 4
-        assert result["valid"] is True
-
-    def test_very_strong_password(self):
-        result = check_password_strength("V3ry$ecure!Long#Pass2024")
-        assert result["score"] >= 5
-        assert result["strength"] in ("strong", "very_strong")
-        assert result["valid"] is True
-
-    def test_result_has_required_keys(self):
-        result = check_password_strength("test")
-        assert "strength" in result
-        assert "score" in result
-        assert "max_score" in result
-        assert "errors" in result
-        assert "valid" in result
-
-    def test_valid_field_true(self):
-        result = check_password_strength("MyStr0ng!Pass")
-        assert result["valid"] is True
-
-    def test_valid_field_false(self):
-        result = check_password_strength("weak")
-        assert result["valid"] is False
-
-    def test_errors_list_for_invalid(self):
-        result = check_password_strength("abc")
-        assert isinstance(result["errors"], list)
-        assert len(result["errors"]) > 0
-
-    def test_feedback_field_present(self):
-        result = check_password_strength("test")
-        assert "feedback" in result
-
-
-class TestPasswordPolicyError:
-    """Tests for the PasswordPolicyError exception."""
-
-    def test_exception_has_errors(self):
-        err = PasswordPolicyError(errors=["Too short", "Missing digit"])
-        assert hasattr(err, "errors")
-        assert len(err.errors) == 2
-
-    def test_exception_is_exception(self):
-        err = PasswordPolicyError(errors=["test"])
-        assert isinstance(err, Exception)
-
-    def test_can_be_raised(self):
-        with pytest.raises(PasswordPolicyError):
-            raise PasswordPolicyError(errors=["Password too weak"])
+    @pytest.mark.parametrize(
+        "password",
+        ["MyStr0ng!Pass", "Correct-Horse-Battery-9", "Tr0ub4dor&3xyz!", "S3cure-Passw0rd!"],
+    )
+    def test_uncommon_password_accepted(self, password):
+        assert validate_password(password) == []

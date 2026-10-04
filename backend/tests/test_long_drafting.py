@@ -356,9 +356,7 @@ class TestGenerateFromPlan:
             # A genuine reconcile edit: one clause becomes a cross-reference.
             full = ("Clause text of section 2. " * 40).strip()
             assert full in doc
-            return doc.replace(
-                full, "Clause text of section 2. " * 38 + "Subject to Section 3.", 1
-            )
+            return doc.replace(full, "Clause text of section 2. " * 38 + "Subject to Section 3.", 1)
 
         client = _client(
             lambda s, u, k: self._long_section_or_reconcile(s, u, k, reconcile=reconcile)
@@ -408,7 +406,10 @@ class TestGenerateFromPlan:
         doc = "Title\n\n" + "\n\n".join(s["text"] for s in sections)
         assert ld.check_reconciled_sections(doc, sections) is None
         # Headings are matched case-insensitively, by plan title or drafted heading.
-        assert ld.check_reconciled_sections(doc.replace("1. DEFINITIONS", "1. Definitions"), sections) is None
+        assert (
+            ld.check_reconciled_sections(doc.replace("1. DEFINITIONS", "1. Definitions"), sections)
+            is None
+        )
         # Out-of-order headings are a violation too.
         swapped = "Title\n\n" + sections[1]["text"] + "\n\n" + sections[0]["text"]
         assert "heading is missing" in ld.check_reconciled_sections(swapped, sections)
@@ -538,3 +539,37 @@ class TestReviseDraft:
         result = await ld.revise_draft(client, draft_text=draft, instructions="Rename the Supplier")
         assert result["text"] == "all revised"
         assert result["revised_sections"] == "all"
+
+
+class TestLongDraftCaseLawGuard:
+    @pytest.mark.asyncio
+    async def test_generated_sections_cannot_introduce_authority(self):
+        def handler(system, user, kwargs):
+            if "senior reviewer" in system:
+                return user.replace("DOCUMENT:\n", "", 1) + "\n=== RECONCILE NOTES ===\n- None."
+            m = ld.re.search(r"YOUR SECTION: (\d+)\. ([^\n]+)", user)
+            body = "See Madeup v. Imaginary, 999 F.3d 1." if m.group(1) == "2" else "Body."
+            return f"{m.group(1)}. {m.group(2).upper()}\n\n{body}"
+
+        result = await ld.generate_from_plan(
+            _client(handler), plan=PLAN, instructions="Draft an MSA", references=[]
+        )
+        assert "Madeup" not in result["text"]
+        assert len(result["case_law_removed"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_authority_from_a_reference_document_is_kept(self):
+        def handler(system, user, kwargs):
+            if "senior reviewer" in system:
+                return user.replace("DOCUMENT:\n", "", 1) + "\n=== RECONCILE NOTES ===\n- None."
+            m = ld.re.search(r"YOUR SECTION: (\d+)\. ([^\n]+)", user)
+            return f"{m.group(1)}. {m.group(2).upper()}\n\nPer Smith v. Jones, notice is required."
+
+        result = await ld.generate_from_plan(
+            _client(handler),
+            plan=PLAN,
+            instructions="Draft an MSA",
+            references=[("Memo", "Our memo relies on Smith v. Jones throughout.")],
+        )
+        assert "Smith v. Jones" in result["text"]
+        assert result["case_law_removed"] == []

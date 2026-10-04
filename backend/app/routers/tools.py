@@ -193,8 +193,8 @@ async def validate_citation(
 async def find_precedents_get(
     topic: str = Query(..., description="Legal topic to search"),
     jurisdiction: str | None = Query(None, description="e.g., 'scotus', 'ca9', 'federal'"),
-    min_citations: int = Query(5, description="Minimum citation count"),
-    limit: int = Query(20, le=100),
+    min_citations: int = Query(5, ge=0, le=1_000_000, description="Minimum citation count"),
+    limit: int = Query(20, ge=1, le=100),
     current_user: TokenData = require_permission("tools.research"),
 ) -> dict:
     """GET version of precedent finder."""
@@ -216,7 +216,7 @@ async def search_dockets_get(
     query: str = Query(..., description="Search terms"),
     court: str | None = Query(None, description="Court ID"),
     party: str | None = Query(None, description="Party name"),
-    limit: int = Query(20, le=100),
+    limit: int = Query(20, ge=1, le=100),
     current_user: TokenData = require_permission("tools.research"),
 ) -> dict:
     """GET version of docket search."""
@@ -256,7 +256,7 @@ async def get_docket_detail(
 async def search_oral_arguments(
     query: str = Query(..., description="Search terms"),
     court: str | None = Query(None, description="Court ID (e.g., 'scotus')"),
-    limit: int = Query(50, le=100),
+    limit: int = Query(50, ge=1, le=100),
     current_user: TokenData = require_permission("tools.research"),
 ) -> dict:
     """
@@ -280,8 +280,8 @@ async def search_oral_arguments(
 @router.get("/trends")
 async def analyze_trend_get(
     topic: str = Query(..., description="Legal topic"),
-    start_year: int = Query(2000, description="Start year"),
-    end_year: int | None = Query(None, description="End year (default: current)"),
+    start_year: int = Query(2000, ge=1600, le=2200, description="Start year"),
+    end_year: int | None = Query(None, ge=1600, le=2200, description="End year (default: current)"),
     current_user: TokenData = require_permission("tools.research"),
 ) -> dict:
     """GET version of trend analysis."""

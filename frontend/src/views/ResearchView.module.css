@@ -395,23 +395,6 @@
   margin: 0 0 6px 0;
 }
 
-.listItem {
-  display: block;
-  padding-left: 6px;
-  margin-bottom: 3px;
-}
-
-.statusLine {
-  display: block;
-  margin-bottom: 4px;
-}
-
-.numberedItem {
-  display: block;
-  padding-left: 4px;
-  margin-bottom: 4px;
-}
-
 /* Citations */
 
 .citationsBlock {
@@ -457,54 +440,10 @@
   width: 100%;
 }
 
-.citationItemCaseLaw {
-  composes: citationItem;
-  border-left: 3px solid var(--primary);
-}
-
-.citationLeft {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.citationSource {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--gray-800);
-}
-
 .citationType {
   font-size: 10px;
   color: var(--gray-500);
   text-transform: capitalize;
-}
-
-.citationTypeCaseLaw {
-  composes: citationType;
-  background: var(--primary-light);
-  color: var(--primary);
-}
-
-.citationRight {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.confidenceBarWrap {
-  width: 40px;
-  height: 4px;
-  background: var(--gray-200);
-  border-radius: 2px;
-  overflow: hidden;
-}
-
-.confidenceText {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--gray-600);
-  min-width: 28px;
 }
 
 .citationStatus {
@@ -514,24 +453,6 @@
   display: flex;
   align-items: center;
   justify-content: center;
-}
-
-.citationStatusApproved {
-  composes: citationStatus;
-  background: var(--green-100);
-  color: var(--green-600);
-}
-
-.citationStatusRejected {
-  composes: citationStatus;
-  background: var(--red-100);
-  color: var(--red-600);
-}
-
-.citationStatusPending {
-  composes: citationStatus;
-  background: var(--gray-100);
-  color: var(--gray-500);
 }
 
 .timestamp {
@@ -567,10 +488,34 @@
   overflow: hidden;
 }
 
+/* Indeterminate: the request is one round trip with no reported progress,
+   so the bar sweeps rather than pretending to fill. */
 .progressFill {
+  width: 35%;
   height: 100%;
   background: var(--navy-700);
-  animation: progressBar 2s ease-in-out infinite;
+  animation: progressSweep 1.6s ease-in-out infinite;
+}
+
+.elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--gray-400);
+}
+
+.cancelBtn {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--gray-600);
+  background: transparent;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cancelBtn:hover {
+  background: var(--gray-100);
 }
 
 /* Input section */
@@ -700,36 +645,6 @@
 
 /* Document Selection Panel (Chat With) */
 
-.chatWithPanel {
-  width: 100%;
-  max-width: 720px;
-  margin-bottom: 16px;
-  padding: 16px;
-  background: white;
-  border-radius: 12px;
-  border: 1px solid var(--gray-200);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.chatWithHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.chatWithLabel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chatWithLabelText {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--gray-800);
-}
-
 .caseLawToggle {
   display: flex;
   align-items: center;
@@ -740,23 +655,6 @@
   padding: 4px 8px;
   border-radius: 4px;
   background: var(--gray-100);
-}
-
-.caseLawToggleActive {
-  composes: caseLawToggle;
-  background: var(--blue-100);
-}
-
-.caseLawCheckbox {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--blue-600);
-}
-
-.docSelectBtnGroup {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .docSelectBtn {
@@ -774,61 +672,9 @@
   transition: all 0.15s;
 }
 
-.docSelectBtnActive {
-  composes: docSelectBtn;
-  border: 2px solid var(--navy-700);
-  background: var(--navy-50, #f0f4f8);
-}
-
 /* Selected files info */
 
-.selectedFilesInfo {
-  margin-top: 12px;
-  padding: 10px 12px;
-  background: var(--green-50, #f0fdf4);
-  border-radius: 8px;
-  border: 1px solid var(--green-200, #bbf7d0);
-}
-
-.selectedFilesInfoRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--green-700, #15803d);
-}
-
-.selectedFilesInfoText {
-  font-weight: 500;
-}
-
-.changeBtn {
-  margin-left: auto;
-  background: none;
-  border: none;
-  color: var(--green-700);
-  cursor: pointer;
-  font-size: 12px;
-  text-decoration: underline;
-}
-
 /* Warning box */
-
-.warningBox {
-  margin-top: 12px;
-  padding: 10px 12px;
-  background: var(--amber-50, #fffbeb);
-  border-radius: 8px;
-  border: 1px solid var(--amber-200, #fde68a);
-}
-
-.warningContent {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--amber-700, #b45309);
-}
 
 /* Lock overlay */
 
@@ -879,25 +725,6 @@
 
 /* Confidence bar fill variants */
 
-.confidenceBarFill {
-  height: 100%;
-  border-radius: 2px;
-  transition: width 0.3s;
-  width: var(--confidence-width);
-}
-
-.confidenceHigh {
-  background: var(--green-500);
-}
-
-.confidenceMid {
-  background: var(--amber-500);
-}
-
-.confidenceLow {
-  background: var(--red-500);
-}
-
 /* Spinner animation */
 
 .spinnerIcon {
@@ -911,29 +738,7 @@
 
 /* Chat with panel icon colors */
 
-.chatWithIcon {
-  color: var(--navy-700);
-}
-
-.chatWithActions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 /* Document select button icon colors */
-
-.docSelectIconNavy {
-  color: var(--navy-600);
-}
-
-.docSelectIconGold {
-  color: var(--gold-600);
-}
-
-.docSelectIconPurple {
-  color: var(--purple-600);
-}
 
 /* Lock icon color */
 
@@ -947,10 +752,9 @@
   opacity: 0.5;
 }
 
-@keyframes progressBar {
-  0% { width: 0; }
-  50% { width: 70%; }
-  100% { width: 100%; }
+@keyframes progressSweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(290%); }
 }
 
 /* ==================== Matter Strategy additions ==================== */
@@ -974,6 +778,14 @@
 }
 
 .briefTruncNote { color: var(--gray-500); }
+
+/* What the brief actually read — stated by the server, shown verbatim. */
+.briefCoverageNote {
+  margin: 2px 0 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gray-500);
+}
 
 .briefPosition {
   margin: 0 0 8px;

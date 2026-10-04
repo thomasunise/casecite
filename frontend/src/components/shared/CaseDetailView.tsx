@@ -1,5 +1,6 @@
 import { Icon } from './Icon';
 import type { CaseInfo } from '../../types';
+import { safeHttpUrl } from './safeUrl';
 
 interface CaseOpinion {
   id?: number;
@@ -111,7 +112,7 @@ function CaseDetailView({ s, selectedCase, caseLoading, setSelectedCase }: CaseD
           )}
 
           {url && (
-            <a href={url} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
+            <a href={safeHttpUrl(url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
               <Icon name="ExternalLink" size={12} /> View on CourtListener
             </a>
           )}

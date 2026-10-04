@@ -57,7 +57,7 @@ test.describe('Authentication Flow', () => {
     await expect(modal.getByText('Full Name *', { exact: true })).toBeVisible();
     await expect(modal.locator('input[type="email"][placeholder="john@lawfirm.com"]')).toBeVisible();
     await expect(modal.getByText('Work Email *', { exact: true })).toBeVisible();
-    await expect(modal.locator('input[type="password"][placeholder="At least 8 characters"]')).toBeVisible();
+    await expect(modal.locator('input[type="password"][placeholder="12+ characters with upper, lower, number & symbol"]')).toBeVisible();
     await expect(modal.getByText('Password *', { exact: true })).toBeVisible();
     await expect(modal.locator('input[type="password"][placeholder="Confirm your password"]')).toBeVisible();
     await expect(modal.getByText('Confirm Password *', { exact: true })).toBeVisible();

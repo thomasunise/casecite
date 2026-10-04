@@ -31,16 +31,18 @@ export const GenerationTab = ({ local, setLocal, s }: GenerationTabProps) => {
     <div className={s.settingGroup}>
       <div className={s.sliderHeader}>
         <label className={s.settingLabel} htmlFor={`${id}-temperature`}>Temperature</label>
-        <span className={`${s.sliderValue} mono`}>{(local.temperature || 0.1).toFixed(2)}</span>
+        <span className={`${s.sliderValue} mono`}>{(local.temperature ?? 0.1).toFixed(2)}</span>
       </div>
-      <input id={`${id}-temperature`} type="range" min="0" max="1" step="0.05" value={local.temperature || 0.1} onChange={e => setLocal({...local, temperature: parseFloat(e.target.value)})} />
+      {/* `??`, not `||`: 0 (fully deterministic) is a valid choice. */}
+      <input id={`${id}-temperature`} type="range" min="0" max="1" step="0.05" value={local.temperature ?? 0.1} onChange={e => setLocal({...local, temperature: parseFloat(e.target.value)})} />
     </div>
     <div className={s.settingGroup}>
       <div className={s.sliderHeader}>
         <label className={s.settingLabel} htmlFor={`${id}-max-tokens`}>Max Tokens</label>
         <span className={`${s.sliderValue} mono`}>{local.maxTokens || 4096}</span>
       </div>
-      <input id={`${id}-max-tokens`} type="range" min="1024" max="8192" step="512" value={local.maxTokens || 4096} onChange={e => setLocal({...local, maxTokens: parseInt(e.target.value)})} />
+      {/* 4096 is the server default; the range covers values saved by earlier builds. */}
+      <input id={`${id}-max-tokens`} type="range" min="1024" max="32768" step="512" value={local.maxTokens || 4096} onChange={e => setLocal({...local, maxTokens: parseInt(e.target.value)})} />
     </div>
   </div>
   );

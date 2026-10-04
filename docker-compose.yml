@@ -1,6 +1,12 @@
 # Coolify Docker Compose - SSL handled by Coolify/Traefik automatically
 # One unified image (root Dockerfile): nginx serves the built frontend on :80
 # and proxies /api/* to uvicorn in the same container.
+#
+# This file does NOT include PostgreSQL or Redis: provision both in Coolify
+# (or use managed services) and pass their URLs below. The Redis instance must
+# run with `maxmemory-policy noeviction` — it holds revoked-token markers and
+# lockout counters, which an LRU policy would silently drop.
+# See deploy/COOLIFY-SETUP.md.
 
 services:
   app:
@@ -22,10 +28,11 @@ services:
       # Required: the public hostname(s) this instance serves. Without it
       # TrustedHost falls back to localhost-only and 400s every real request.
       - ALLOWED_HOSTS=${ALLOWED_HOSTS:?ALLOWED_HOSTS is required (comma-separated hostnames, e.g. app.example.com)}
-      # Confirm the data volume is encrypted at rest (LUKS/BitLocker/FileVault or
-      # provider disk encryption). Derived privileged text (vector chunks,
-      # extracted clauses, chat history) is stored in cleartext; the app refuses
-      # to start until you acknowledge FDE is enabled on this volume.
+      # Confirm storage is encrypted at rest (LUKS or provider disk encryption):
+      # this container's data volume AND the disks behind the Postgres and
+      # Redis instances named in DATABASE_URL / REDIS_URL. Derived privileged
+      # text (vector chunks, extracted clauses, chat history, job results) is
+      # stored in cleartext; the app refuses to start until you acknowledge it.
       - DISK_ENCRYPTION_ACKNOWLEDGED=${DISK_ENCRYPTION_ACKNOWLEDGED:?DISK_ENCRYPTION_ACKNOWLEDGED is required - enable full-disk encryption on the data volume, then set to true}
       # Required: the reverse proxy's IP/CIDR (Coolify/Traefik connects from its
       # Docker-network address, e.g. 10.0.1.0/24 — find it with
@@ -34,7 +41,18 @@ services:
       # IP, so one user's failed logins lock out the whole firm and rate limits
       # apply to everyone at once. IPs/CIDRs only, not hostnames.
       - TRUSTED_PROXIES=${TRUSTED_PROXIES:?TRUSTED_PROXIES is required - set it to the reverse proxy's IP/CIDR (e.g. the Coolify/Traefik Docker network subnet), otherwise every client collapses to one IP and lockouts/rate limits hit the whole firm}
-      # --- Providers ---
+      # Required to create the FIRST (admin) account: production refuses that
+      # registration unless it carries this token (openssl rand -hex 16).
+      - REGISTRATION_BOOTSTRAP_TOKEN=${REGISTRATION_BOOTSTRAP_TOKEN:?REGISTRATION_BOOTSTRAP_TOKEN is required (openssl rand -hex 16)}
+      # PostgreSQL TLS: "require" (default) for a database reached over a
+      # network; "internal" only for a Postgres on the same private Docker network.
+      - DB_SSL=${DB_SSL:-require}
+      # --- Optional ---
+      - FRONTEND_URL=${FRONTEND_URL:-}
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
+      - COURTLISTENER_API_TOKEN=${COURTLISTENER_API_TOKEN:-}
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-}
+      # --- Providers (optional: without one, each user saves their own key) ---
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
@@ -46,10 +64,13 @@ services:
     expose:
       - "80"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # Through nginx (:80) so a dead nginx or a dead uvicorn both show up.
+      test: ["CMD", "curl", "-fsS", "http://localhost/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      # Migrations and first-boot seeding run before uvicorn listens.
+      start_period: 90s
     restart: unless-stopped
 
 volumes:

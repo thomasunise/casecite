@@ -51,6 +51,49 @@ def verify_totp(secret: str, code: str) -> bool:
     return pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1)
 
 
+# A TOTP code stays valid for its 30-second step plus one step either side
+# (valid_window=1), so a used code is remembered a little longer than that.
+_TOTP_REUSE_TTL_SECONDS = 120
+
+# In-memory fallback for used-code tracking (dev, or if Redis is down).
+# Maps sha256(user_id:code) -> expiry epoch; pruned lazily on access.
+_used_totp_codes: dict[str, float] = {}
+
+
+def verify_totp_once(user_id: str, secret: str, code: str, now: float | None = None) -> bool:
+    """Verify a TOTP code and spend it: the same code is never accepted twice.
+
+    RFC 6238 requires that a verifier not accept a second use of an OTP. Without
+    this, a code observed once (shoulder-surfed, phished in real time, or read
+    from a log) can be replayed for the rest of its ~90-second validity.
+    """
+    if not verify_totp(secret, code):
+        return False
+    normalized = code.strip().replace(" ", "")
+    marker = hashlib.sha256(f"{user_id}:{normalized}".encode()).hexdigest()
+    current = now if now is not None else time.time()
+
+    from app.redis_utils import require_redis
+
+    client = require_redis()
+    if client is not None:
+        try:
+            # SET NX succeeds only the first time this (user, code) is seen.
+            return bool(
+                client.set(f"mfa_totp_used:{marker}", "1", nx=True, ex=_TOTP_REUSE_TTL_SECONDS)
+            )
+        except Exception:  # fall through to in-memory on any Redis error
+            pass
+
+    for key, exp in list(_used_totp_codes.items()):
+        if exp < current:
+            _used_totp_codes.pop(key, None)
+    if marker in _used_totp_codes:
+        return False
+    _used_totp_codes[marker] = current + _TOTP_REUSE_TTL_SECONDS
+    return True
+
+
 def encrypt_secret(secret: str) -> str:
     return encryption_service.encrypt_string(secret)
 

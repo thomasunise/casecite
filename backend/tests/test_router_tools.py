@@ -2,12 +2,6 @@
 Integration tests for the ToolsRouter (/tools).
 """
 
-import os
-
-os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
-os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
-os.environ["DEBUG"] = "true"
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -270,9 +264,7 @@ class TestAuthGating:
             new_callable=AsyncMock,
             return_value={"results": [], "total": 0, "next_cursor": None},
         ):
-            resp = client.get(
-                "/api/v1/tools/cases/search", params={"q": "x"}, headers=auth_headers
-            )
+            resp = client.get("/api/v1/tools/cases/search", params={"q": "x"}, headers=auth_headers)
         assert resp.status_code == 200
 
     def test_courts_anonymous_401(self, client):
@@ -285,50 +277,3 @@ class TestAuthGating:
             resp = client.get("/api/v1/legal-docs/courts", headers=auth_headers)
             assert resp.status_code == 200
             assert resp.json()["count"] == 0
-
-
-class TestOptionalAuthRevocation:
-    """get_current_user_optional runs the SAME revocation checks as get_current_user."""
-
-    @staticmethod
-    def _request_and_creds(user_id):
-        from datetime import UTC, datetime
-
-        from fastapi.security import HTTPAuthorizationCredentials
-        from starlette.requests import Request as StarletteRequest
-
-        from app.services.auth import User, UserRole, auth_service
-
-        user = User(
-            id=user_id,
-            email=f"{user_id}@casecite.legal",
-            name="Optional Auth",
-            roles=[UserRole.ATTORNEY],
-            last_login=datetime.now(UTC),
-        )
-        token = auth_service.create_access_token(user)
-        creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
-        scope = {
-            "type": "http",
-            "method": "GET",
-            "path": "/",
-            "headers": [],
-            "query_string": b"",
-            "client": ("1.2.3.4", 1234),
-        }
-        return StarletteRequest(scope), creds
-
-    async def test_revoked_token_yields_none(self, client):
-        from app.services.auth import auth_service, get_current_user_optional
-
-        request, creds = self._request_and_creds("revoked-user-1")
-        with patch.object(auth_service, "_is_user_revoked", return_value=True):
-            assert await get_current_user_optional(request, creds) is None
-
-    async def test_valid_token_still_authenticates(self, client):
-        from app.services.auth import get_current_user_optional
-
-        request, creds = self._request_and_creds("opt-auth-user-1")
-        result = await get_current_user_optional(request, creds)
-        assert result is not None
-        assert result.user_id == "opt-auth-user-1"

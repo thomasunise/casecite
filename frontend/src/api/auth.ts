@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { AuthResponse, UserInfo, MessageResponse } from './types';
+import type { AuthResponse, UserInfo, MessageResponse, SessionInfo } from './types';
 
 Object.assign(api, {
   async login(email: string, password: string): Promise<AuthResponse> {
@@ -9,18 +9,6 @@ Object.assign(api, {
     });
     api.setToken(result.access_token);
     return result;
-  },
-
-  async refreshToken(): Promise<AuthResponse | null> {
-    try {
-      const result = await api.request('/auth/refresh', {
-        method: 'POST',
-        body: JSON.stringify({}),
-      });
-      return result as AuthResponse;
-    } catch {
-      return null;
-    }
   },
 
   async logout(): Promise<void> {
@@ -33,10 +21,12 @@ Object.assign(api, {
     return api.request('/auth/me');
   },
 
-  async register(email: string, name: string, password: string, company: string): Promise<AuthResponse> {
+  async register(email: string, name: string, password: string, company: string, bootstrapToken?: string): Promise<AuthResponse> {
     const result = await api.request('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, name, password, company }),
+      // The setup token is only needed (and only sent) when creating the
+      // instance's first administrator account.
+      body: JSON.stringify({ email, name, password, company, ...(bootstrapToken ? { bootstrap_token: bootstrapToken } : {}) }),
     });
     api.setToken(result.access_token);
     return result;
@@ -47,5 +37,36 @@ Object.assign(api, {
       method: 'POST',
       body: JSON.stringify({ email }),
     });
+  },
+
+  async verifyResetToken(token: string): Promise<{ valid: boolean }> {
+    return api.request('/auth/verify-reset-token', {
+      method: 'POST',
+      body: JSON.stringify({ token }),
+    });
+  },
+
+  async resetPassword(token: string, newPassword: string): Promise<MessageResponse> {
+    return api.request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, new_password: newPassword }),
+    });
+  },
+
+  async changePassword(currentPassword: string, newPassword: string): Promise<{ status: string }> {
+    return api.request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+  },
+
+  async getSessions(): Promise<{ sessions: SessionInfo[] }> {
+    return api.request('/auth/sessions');
+  },
+
+  async logoutAllSessions(): Promise<{ status: string }> {
+    const result = await api.request('/auth/logout/all', { method: 'POST' });
+    api.token = null;
+    return result;
   },
 });

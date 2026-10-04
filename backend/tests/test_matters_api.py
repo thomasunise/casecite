@@ -130,16 +130,45 @@ def test_matter_lifecycle_create_invite_access_remove(client):
     assert client.get(f"/api/v1/matters/{matter_id}", headers=_headers(colleague)).status_code == 404
 
 
-def test_invite_unknown_email_404(client):
-    owner = _user(f"mo2-{uuid.uuid4().hex[:8]}", f"mo2-{uuid.uuid4().hex[:8]}@casecite.legal")
+def test_invite_does_not_reveal_whether_an_account_exists(client, audit_events):
+    """An unknown address and a deactivated account get the same generic 400,
+    so the endpoint cannot be used to probe which emails have accounts."""
+    from app.models.auth import User as DBUser
+
+    from tests.helpers import db_add
+
+    suffix = uuid.uuid4().hex[:8]
+    owner = _user(f"mo2-{suffix}", f"mo2-{suffix}@casecite.legal")
+    inactive_email = f"departed-{suffix}@casecite.legal"
+    db_add(
+        DBUser(
+            id=f"departed-{suffix}",
+            email=inactive_email,
+            name="Departed",
+            password_hash="x",
+            roles=["attorney"],
+            is_active=False,
+        )
+    )
     created = client.post("/api/v1/matters", headers=_headers(owner), json={"name": "Solo"})
     matter_id = created.json()["id"]
-    r = client.post(
-        f"/api/v1/matters/{matter_id}/members",
-        headers=_headers(owner),
-        json={"email": "nobody-here@example.com"},
-    )
-    assert r.status_code == 404
+
+    responses = [
+        client.post(
+            f"/api/v1/matters/{matter_id}/members", headers=_headers(owner), json={"email": email}
+        )
+        for email in ("nobody-here@example.com", inactive_email)
+    ]
+    assert [r.status_code for r in responses] == [400, 400]
+    assert responses[0].json() == responses[1].json()
+    assert "No user" not in responses[0].text
+
+    detail = client.get(f"/api/v1/matters/{matter_id}", headers=_headers(owner)).json()
+    assert detail["member_count"] == 1  # the deactivated account was not added
+
+    failed = [e for e in audit_events if e["details"].get("action") == "matter_member_add_failed"]
+    assert len(failed) == 2
+    assert all(e["success"] is False and e["resource_id"] == matter_id for e in failed)
 
 
 def test_delete_matter_owner_only(client):
@@ -150,3 +179,78 @@ def test_delete_matter_owner_only(client):
     assert client.delete(f"/api/v1/matters/{matter_id}", headers=_headers(stranger)).status_code == 404
     assert client.delete(f"/api/v1/matters/{matter_id}", headers=_headers(owner)).status_code == 200
     assert client.get(f"/api/v1/matters/{matter_id}", headers=_headers(owner)).status_code == 404
+
+
+def test_create_and_share_require_the_matters_permission(client):
+    """Deciding who can read privileged documents is not a viewer/paralegal action."""
+    suffix = uuid.uuid4().hex[:8]
+    for role in (UserRole.VIEWER, UserRole.PARALEGAL):
+        user = User(
+            id=f"mnp-{role.value}-{suffix}",
+            email=f"mnp-{role.value}-{suffix}@casecite.legal",
+            name="No Permission",
+            roles=[role],
+            last_login=datetime.now(UTC),
+        )
+        resp = client.post("/api/v1/matters", headers=_headers(user), json={"name": "Nope"})
+        assert resp.status_code == 403, role
+        # Listing the matters you belong to stays available to every role.
+        assert client.get("/api/v1/matters", headers=_headers(user)).status_code == 200
+
+
+def test_matter_changes_are_audited(client, audit_events):
+    suffix = uuid.uuid4().hex[:8]
+    owner = _user(f"mau-{suffix}", f"mau-{suffix}@casecite.legal")
+    colleague_id, colleague_email = f"mauc-{suffix}", f"mauc-{suffix}@casecite.legal"
+    _insert_db_user(colleague_id, colleague_email, "Colleague")
+
+    matter_id = client.post(
+        "/api/v1/matters", headers=_headers(owner), json={"name": "Confidential Name"}
+    ).json()["id"]
+    client.post(
+        f"/api/v1/matters/{matter_id}/members",
+        headers=_headers(owner),
+        json={"email": colleague_email},
+    )
+    client.delete(f"/api/v1/matters/{matter_id}/members/{colleague_id}", headers=_headers(owner))
+    client.delete(f"/api/v1/matters/{matter_id}", headers=_headers(owner))
+
+    events = [e for e in audit_events if e.get("resource_type") == "matter"]
+    assert [e["details"]["action"] for e in events] == [
+        "matter_created",
+        "matter_member_added",
+        "matter_member_removed",
+        "matter_deleted",
+    ]
+    assert all(e["resource_id"] == matter_id and e["user_id"] == owner.id for e in events)
+    assert events[1]["details"]["member_user_id"] == colleague_id
+    # Matter and client names are confidential and stay out of the audit trail.
+    assert "Confidential Name" not in str(events)
+
+
+def test_admin_can_list_all_shared_matters(client):
+    suffix = uuid.uuid4().hex[:8]
+    owner = _user(f"mal-{suffix}", f"mal-{suffix}@casecite.legal")
+    matter_id = client.post(
+        "/api/v1/matters", headers=_headers(owner), json={"name": "Walled Matter"}
+    ).json()["id"]
+    client.get("/api/v1/matters", headers=_headers(owner))  # creates the personal matter
+
+    admin = User(
+        id=f"madmin-{suffix}",
+        email=f"madmin-{suffix}@casecite.legal",
+        name="Admin",
+        roles=[UserRole.ADMIN],
+        last_login=datetime.now(UTC),
+    )
+    # A non-admin cannot use the oversight listing.
+    assert client.get("/api/v1/matters/all", headers=_headers(owner)).status_code == 403
+
+    resp = client.get("/api/v1/matters/all", headers=_headers(admin))
+    assert resp.status_code == 200
+    matters = {m["id"]: m for m in resp.json()["matters"]}
+    assert matters[matter_id]["owner_id"] == owner.id
+    assert matters[matter_id]["role"] == "none"  # oversight is not membership
+    assert not any(m["is_personal"] for m in matters.values())
+    # ...and it grants no access to the matter itself.
+    assert client.get(f"/api/v1/matters/{matter_id}", headers=_headers(admin)).status_code == 404

@@ -8,9 +8,8 @@ os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
 os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
 os.environ["DEBUG"] = "true"
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 from app.config import settings
 from app.services.user_keys import UserAPIKeys, _IsolatedGeminiModel
 
@@ -33,12 +32,24 @@ class TestUserAPIKeysValidation:
     def test_valid_openai_key(self):
         keys = UserAPIKeys(openai="sk-" + "a" * 48)
         assert keys.openai is not None
-        assert keys.has_openai() is True
+        assert keys.openai
 
-    def test_invalid_openai_key_wrong_prefix(self):
-        keys = UserAPIKeys(openai="wrong-" + "a" * 48)
+    def test_openai_compatible_gateway_key_is_accepted(self):
+        """The OpenAI slot also carries gateway keys (Groq "gsk_", OpenRouter
+        "sk-or-", Together) — a missing "sk-" prefix must not discard them."""
+        keys = UserAPIKeys(openai="gsk_" + "a" * 48)
+        assert keys.openai == "gsk_" + "a" * 48
+
+    def test_placeholder_keys_are_treated_as_absent(self):
+        keys = UserAPIKeys(
+            openai="sk-your-openai-api-key",
+            anthropic="sk-ant-your-anthropic-key",
+            voyage="pa-your-voyage-key",
+            google="your-google-api-key",
+        )
         assert keys.openai is None
-        assert keys.has_openai() is False
+        assert keys.anthropic is None
+        assert keys.voyage is None
 
     def test_invalid_openai_key_too_short(self):
         keys = UserAPIKeys(openai="sk-abc")
@@ -51,7 +62,7 @@ class TestUserAPIKeysValidation:
     def test_valid_anthropic_key(self):
         keys = UserAPIKeys(anthropic="sk-ant-" + "b" * 48)
         assert keys.anthropic is not None
-        assert keys.has_anthropic() is True
+        assert keys.anthropic
 
     def test_invalid_anthropic_key_wrong_prefix(self):
         keys = UserAPIKeys(anthropic="invalid-" + "b" * 48)
@@ -60,7 +71,7 @@ class TestUserAPIKeysValidation:
     def test_valid_voyage_key_pa_prefix(self):
         keys = UserAPIKeys(voyage="pa-" + "c" * 48)
         assert keys.voyage is not None
-        assert keys.has_voyage() is True
+        assert keys.voyage
 
     def test_valid_voyage_key_vo_prefix(self):
         keys = UserAPIKeys(voyage="vo-" + "c" * 48)
@@ -73,12 +84,12 @@ class TestUserAPIKeysValidation:
     def test_google_key_length_validation(self):
         keys = UserAPIKeys(google="a" * 40)
         assert keys.google is not None
-        assert keys.has_google() is True
+        assert keys.google
 
     def test_google_key_too_short(self):
         keys = UserAPIKeys(google="abc")
         assert keys.google is None
-        assert keys.has_google() is False
+        assert not keys.google
 
     def test_google_key_too_long(self):
         keys = UserAPIKeys(google="a" * 300)
@@ -87,7 +98,7 @@ class TestUserAPIKeysValidation:
     def test_cohere_key_length_validation(self):
         keys = UserAPIKeys(cohere="x" * 40)
         assert keys.cohere is not None
-        assert keys.has_cohere() is True
+        assert keys.cohere
 
     def test_cohere_key_too_short(self):
         keys = UserAPIKeys(cohere="x" * 5)
@@ -124,8 +135,8 @@ class TestFromRequest:
         )
 
         keys = UserAPIKeys.from_request(request)
-        assert keys.has_openai() is True
-        assert keys.has_anthropic() is True
+        assert keys.openai
+        assert keys.anthropic
 
     def test_missing_headers_return_none(self):
         request = _make_mock_request({})
@@ -143,7 +154,7 @@ class TestFromRequest:
             }.get(key_type)
 
             keys = UserAPIKeys.from_request(request, user_id="user-1")
-            assert keys.has_openai() is True
+            assert keys.openai
 
     def test_headers_take_precedence_over_stored(self):
         request = _make_mock_request({"X-OpenAI-Key": "sk-" + "a" * 48})
@@ -244,6 +255,19 @@ class TestClientCreation:
         keys = UserAPIKeys()
         assert keys.get_google_model() is None
 
+    def test_get_google_model_uses_the_selected_model(self):
+        """Regression: the user's Gemini choice was ignored for a fixed default."""
+        keys = UserAPIKeys(google="a" * 40)
+        fake_genai = MagicMock()
+        fake_google = MagicMock(genai=fake_genai)
+
+        with patch.dict("sys.modules", {"google": fake_google, "google.genai": fake_genai}):
+            model = keys.get_google_model("gemini-2.5-flash")
+            model.generate_content("hello")
+
+        call = fake_genai.Client.return_value.models.generate_content.call_args
+        assert call.kwargs["model"] == "gemini-2.5-flash"
+
     def test_get_google_model_with_key_genai(self):
         keys = UserAPIKeys(google="a" * 40)
 
@@ -286,22 +310,24 @@ class TestIsolatedGeminiModel:
             assert "test-key" not in call_args[0][0]
             assert call_args.kwargs["headers"]["x-goog-api-key"] == "test-key"
 
-    @pytest.mark.asyncio
-    async def test_generate_content_async(self):
+    def test_generate_content_returns_text_like_the_sdk(self):
+        """The REST fallback must expose ``.text`` — the RAG pipeline reads it."""
         model = _IsolatedGeminiModel(api_key="test-key")
 
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"candidates": []}
-        mock_response.raise_for_status = MagicMock()
+        with patch("httpx.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "candidates": [{"content": {"parts": [{"text": "Hello "}, {"text": "there"}]}}]
+            }
+            mock_response.raise_for_status = MagicMock()
+            mock_post.return_value = mock_response
 
-        with patch("httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            assert model.generate_content("Hi").text == "Hello there"
 
-            _result = await model.generate_content_async("Hello!")
-            mock_client.post.assert_called_once()
+    def test_default_model_comes_from_settings(self):
+        from app.config import settings
+
+        assert _IsolatedGeminiModel(api_key="test-key")._model_name == settings.gemini_model
 
 
 # =============================================================================

@@ -20,6 +20,9 @@ from app.middleware.security import SecurityMiddleware
 
 logger = logging.getLogger(__name__)
 
+# Hosts the in-container healthcheck uses to reach the app.
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1")
+
 
 def configure_middleware(app: FastAPI) -> None:
     """Register all middleware on the FastAPI application."""
@@ -34,17 +37,30 @@ def configure_middleware(app: FastAPI) -> None:
     # Trusted hosts (configure for your domain)
     # In production, set ALLOWED_HOSTS environment variable
     allowed_hosts_env = os.environ.get("ALLOWED_HOSTS", "")
-    if allowed_hosts_env:
-        allowed_hosts = [h.strip() for h in allowed_hosts_env.split(",")]
+    configured_hosts = [h.strip() for h in allowed_hosts_env.split(",") if h.strip()]
+    if configured_hosts:
+        # Loopback is always allowed alongside the configured hostnames: the
+        # container healthcheck (and the bundled nginx/Caddy probes) reach the
+        # app as http://localhost:8000, so a public-hostname-only list would
+        # 400 every probe and the container would never turn healthy. A
+        # loopback Host header is only reachable from inside the container or
+        # its private network, never through the public proxy.
+        allowed_hosts = list(dict.fromkeys([*configured_hosts, *_LOOPBACK_HOSTS]))
     elif settings.debug:
         allowed_hosts = ["*"]
     else:
-        allowed_hosts = ["localhost", "127.0.0.1"]
+        allowed_hosts = list(_LOOPBACK_HOSTS)
         logger.warning(
             "ALLOWED_HOSTS is not set in production — TrustedHost will reject every "
             "request whose Host header isn't localhost (all real traffic 400s). Set "
             "ALLOWED_HOSTS to this instance's public hostname(s)."
         )
+
+    # A deliberate localhost-only instance (the documented DOMAIN=localhost
+    # trial): every configured host is loopback, so nothing public can reach it.
+    localhost_trial = bool(configured_hosts) and all(
+        h.split(":")[0].lower() in _LOOPBACK_HOSTS for h in configured_hosts
+    )
 
     # Behind a reverse proxy the trusted-proxy list must name the proxy, or every
     # client collapses to the proxy IP (breaking per-IP rate limits, account
@@ -75,6 +91,17 @@ def configure_middleware(app: FastAPI) -> None:
                     local in origin.lower()
                     for local in ["localhost", "127.0.0.1", "0.0.0.0"]  # nosec B104 - denylist for validation, not a bind address
                 ):
+                    if localhost_trial:
+                        # ALLOWED_HOSTS is loopback-only, so this instance is not
+                        # publicly reachable and a localhost origin is the only
+                        # one that can work.
+                        logger.warning(
+                            f"CORS origin '{origin}' is a localhost origin. Accepted because "
+                            "ALLOWED_HOSTS is localhost-only (local trial); set DOMAIN / "
+                            "ALLOWED_HOSTS / CORS_ORIGINS to a real hostname before exposing "
+                            "this instance."
+                        )
+                        continue
                     raise ValueError(
                         f"SECURITY ERROR: Localhost origins not allowed in production: {origin}. "
                         "Remove localhost origins from CORS_ORIGINS for production deployments."
@@ -103,20 +130,8 @@ def configure_middleware(app: FastAPI) -> None:
             "Localhost origins are not allowed in production."
         )
 
-    # Validate DATABASE_URL uses SSL in production (for PostgreSQL)
-    if not settings.debug:
-        if settings.database_url and "postgresql" in settings.database_url:
-            if "sslmode" not in settings.database_url:
-                # Allow localhost connections without SSL (custom installs with local DB)
-                if (
-                    "localhost" not in settings.database_url
-                    and "127.0.0.1" not in settings.database_url
-                ):
-                    logger.error(
-                        "SECURITY: DATABASE_URL does not include sslmode parameter. "
-                        "Add ?sslmode=require for encrypted database connections. "
-                        "This will be enforced in a future release."
-                    )
+    # PostgreSQL TLS is enforced in app/database.py via DB_SSL (require / internal);
+    # asyncpg does not accept an `sslmode` URL parameter, so nothing is checked here.
 
     # Allowed CORS headers
     cors_headers = (

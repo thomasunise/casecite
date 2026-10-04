@@ -3,12 +3,16 @@
 # Stage 2: Serve both backend API and frontend from one container
 
 # ---- Stage 1: Frontend Build ----
-# Floating patch tag: picks up OS security fixes on rebuild (Trivy gates the
-# image in CI, so a stale pin means a permanently red build job).
+# Base images float on the minor line on purpose (node:20, python:3.11): a
+# rebuild picks up OS security fixes, and Trivy gates the image in CI, so a
+# digest pin that nobody bumps means a permanently red build job. For a fully
+# reproducible build, replace the tags with `image@sha256:<digest>` (resolve
+# with `docker buildx imagetools inspect <image>`); Dependabot's docker
+# ecosystem (.github/dependabot.yml) will then propose digest bumps.
 FROM node:20-slim AS frontend-build
 
 WORKDIR /frontend
-COPY frontend/package.json frontend/package-lock.json* frontend/.npmrc* ./
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci
 COPY frontend/ .
 RUN npm run build && \
@@ -24,16 +28,13 @@ ENV PYTHONUTF8=1 \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
 
-# Install nginx (pinned), system dependencies, and security updates
+# Install nginx, system dependencies, and security updates (distro versions,
+# not pinned — see the base-image note above)
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     nginx \
     curl \
     gosu \
     libmagic1 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libcairo2 \
-    libgdk-pixbuf-2.0-0 \
     libffi8 \
     tesseract-ocr \
     tesseract-ocr-eng \
@@ -41,11 +42,6 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 
 # Create non-root user for running the application
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
-
-# Bake the git sha into the runtime env so /health can report which build is
-# serving. Coolify (and most CI) pass SOURCE_COMMIT as a build arg.
-ARG SOURCE_COMMIT=unknown
-ENV SOURCE_COMMIT=$SOURCE_COMMIT
 
 # Set working directory
 WORKDIR /app
@@ -99,9 +95,13 @@ COPY --chown=appuser:appuser nginx.unified.conf /etc/nginx/sites-enabled/default
 RUN mkdir -p /app/data/chroma /app/data/uploads /app/data/audit_logs /app/data/user_settings \
     && chmod -R 755 /app/data
 
-# Allow nginx to run as non-root (bind to port 80)
+# nginx workers run as appuser (the master is started by start.sh, see below)
 RUN chown -R appuser:appuser /var/log/nginx /var/lib/nginx /run \
-    && sed -i 's/user www-data;/user appuser;/' /etc/nginx/nginx.conf 2>/dev/null || true
+    && sed -i 's/user www-data;/user appuser;/' /etc/nginx/nginx.conf \
+    && grep -q '^user appuser;' /etc/nginx/nginx.conf
+
+# License terms and third-party notices travel with the image
+COPY LICENSE NOTICE.md /app/
 
 # Declare data volume
 VOLUME ["/app/data"]
@@ -109,14 +109,26 @@ VOLUME ["/app/data"]
 # Expose port 80 (Coolify expects this)
 EXPOSE 80
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+# Health check — through nginx (:80), so a dead nginx OR a dead uvicorn marks
+# the container unhealthy. The start period covers migrations and first boot.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+    CMD curl -fsS http://localhost/health || exit 1
 
 # Start script - runs both nginx and uvicorn
 COPY start.sh /start.sh
 RUN chmod +x /start.sh
 
-# Run as root so we can fix volume permissions at startup,
-# then start.sh drops to appuser via gosu/su-exec
+# Bake the git sha into the runtime env so /health can report which build is
+# serving. CI and Coolify pass SOURCE_COMMIT as a build arg. Declared last so a
+# new commit does not invalidate the dependency layers above.
+ARG SOURCE_COMMIT=unknown
+ENV SOURCE_COMMIT=$SOURCE_COMMIT
+
+# No USER directive on purpose: start.sh must begin as root to chown the mounted
+# /app/data volume (Docker/Coolify create named volumes root-owned) and to let
+# nginx bind :80. It then drops privileges: nginx workers run as appuser (see
+# the nginx.conf edit above) and uvicorn — the only process that touches client
+# data — is started as appuser via gosu. start.sh refuses to start if the drop
+# does not work. Alembic migrations run before the drop and touch only the
+# database.
 CMD ["/start.sh"]

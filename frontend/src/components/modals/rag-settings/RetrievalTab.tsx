@@ -16,9 +16,6 @@ export const RetrievalTab = ({ local, setLocal, s }: RetrievalTabProps) => {
       <select id={`${id}-vector-db`} className={s.select} value={local.vectorDb} onChange={e => setLocal({...local, vectorDb: e.target.value})}>
         <option value="chroma">ChromaDB (Default - Local)</option>
         <option value="pinecone">Pinecone (Cloud)</option>
-        <option value="weaviate">Weaviate</option>
-        <option value="qdrant">Qdrant</option>
-        <option value="milvus">Milvus</option>
       </select>
     </div>
     <div className={s.settingGroup}>
@@ -44,14 +41,14 @@ export const RetrievalTab = ({ local, setLocal, s }: RetrievalTabProps) => {
         <label className={s.settingLabel} htmlFor={`${id}-chunk-size`}>Chunk Size (tokens)</label>
         <span className={`${s.sliderValue} mono`}>{local.chunkSize}</span>
       </div>
-      <input id={`${id}-chunk-size`} type="range" min="256" max="2048" step="128" value={local.chunkSize} onChange={e => setLocal({...local, chunkSize: parseInt(e.target.value)})} />
+      <input id={`${id}-chunk-size`} type="range" min="200" max="2000" step="100" value={local.chunkSize} onChange={e => setLocal({...local, chunkSize: parseInt(e.target.value)})} />
     </div>
     <div className={s.settingGroup}>
       <div className={s.sliderHeader}>
         <label className={s.settingLabel} htmlFor={`${id}-chunk-overlap`}>Chunk Overlap</label>
         <span className={`${s.sliderValue} mono`}>{local.chunkOverlap}</span>
       </div>
-      <input id={`${id}-chunk-overlap`} type="range" min="0" max="512" step="32" value={local.chunkOverlap} onChange={e => setLocal({...local, chunkOverlap: parseInt(e.target.value)})} />
+      <input id={`${id}-chunk-overlap`} type="range" min="0" max="500" step="20" value={local.chunkOverlap} onChange={e => setLocal({...local, chunkOverlap: parseInt(e.target.value)})} />
     </div>
   </div>
   );

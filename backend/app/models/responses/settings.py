@@ -28,3 +28,4 @@ class ClearResponse(BaseModel):
     status: str
     message: str
     cleared_documents: int | None = None
+    failed_documents: int | None = None

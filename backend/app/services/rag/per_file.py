@@ -20,10 +20,13 @@ import json
 import logging
 from typing import Any
 
+from app.config import settings
 from app.services.authority_mapper.service import find_quote_offset
 from app.services.documents import document_service
 from app.services.llm_clients import chat_model, make_openai, openai_chat
+from app.services.provider_policy import enforce_openai_client
 from app.services.rag.claim_grounding import MIN_CONTENT_RATIO, content_ratio, line_of, tidy_span
+from app.services.rag.generation import chosen_provider_text, provider_of_model, strip_json_fences
 from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,16 @@ def _api_key(user_keys) -> str | None:
     if user_keys and getattr(user_keys, "openai", None):
         return user_keys.openai
     return None
+
+
+def _chosen_provider_available(user_keys, model: str | None) -> bool:
+    """True when the user's chosen model is Claude/Gemini and a client for it exists."""
+    family = provider_of_model(model)
+    if family == "anthropic":
+        return bool((user_keys and user_keys.anthropic) or settings.anthropic_api_key)
+    if family == "google":
+        return bool(user_keys and user_keys.google)
+    return False
 
 
 def build_map_prompt(query: str, filename: str, text: str) -> str:
@@ -118,8 +131,11 @@ def build_per_file_citations(query: str, file_answers: list[dict[str, Any]]) -> 
                     "id": f"pf-{fa['document_id']}-{rank}",
                     "source": fa["filename"],
                     "type": "document",
-                    "confidence": 95.0 if verified else 60.0,
-                    "similarity": 0.95 if verified else 0.6,
+                    # Every file was read in full — nothing was ranked, so
+                    # there is no retrieval score to report. ``verified`` (the
+                    # quote was found verbatim in the file) is the signal.
+                    "confidence": 0.0,
+                    "similarity": 0.0,
                     "relevance_rank": rank,
                     "chunk_index": 0,
                     "token_count": 0,
@@ -155,15 +171,41 @@ async def per_file_answer(
     document_ids: list[str],
     user_id: str,
     user_keys=None,
+    model: str | None = None,
 ) -> dict[str, Any] | None:
     """Map-reduce answer across the scoped files, or None to fall back to RAG.
 
     Returns the same {content, citations, stats} shape the RAG service
     produces so the chat router can use it interchangeably.
+
+    ``model`` is the user's chosen chat model. A Claude/Gemini choice runs the
+    map and reduce passes on that provider; otherwise they run on the
+    OpenAI-compatible client with the instance chat model.
     """
-    client = make_openai(_api_key(user_keys), async_=True)
-    if client is None:
-        return None
+    # Full file text goes to whichever provider runs these passes, so honour
+    # the user's choice: only fall back to the OpenAI-compatible client when
+    # their chosen model is served by it (or its own provider has no key).
+    use_chosen = _chosen_provider_available(user_keys, model)
+    client = None
+    if not use_chosen:
+        client = make_openai(_api_key(user_keys), async_=True)
+        if client is None:
+            return None
+        enforce_openai_client(client, "per-file analysis")
+
+    async def _complete(prompt: str, temperature: float, json_mode: bool) -> str:
+        if use_chosen:
+            text = await chosen_provider_text(prompt, user_keys=user_keys, model=model)
+            return strip_json_fences(text) if json_mode else (text or "")
+        kwargs: dict[str, Any] = {"response_format": {"type": "json_object"}} if json_mode else {}
+        resp = await openai_chat(
+            client,
+            model=chat_model(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            **kwargs,
+        )
+        return resp.choices[0].message.content or ""
 
     # Load every file's text first — a file we can't read is reported, not
     # silently skipped into a wrong "these 4 files" answer.
@@ -185,19 +227,10 @@ async def per_file_answer(
     async def _map_one(f: dict[str, Any]) -> dict[str, Any] | None:
         async with semaphore:
             try:
-                resp = await openai_chat(
-                    client,
-                    model=chat_model(),
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": build_map_prompt(query, f["filename"], f["text"]),
-                        }
-                    ],
-                    temperature=0.1,
-                    response_format={"type": "json_object"},
+                raw = await _complete(
+                    build_map_prompt(query, f["filename"], f["text"]), 0.1, json_mode=True
                 )
-                parsed = _parse_map_payload(resp.choices[0].message.content)
+                parsed = _parse_map_payload(raw)
                 if not parsed["answer"]:
                     return None
                 return {**f, **parsed}
@@ -227,13 +260,7 @@ async def per_file_answer(
                 kept.append(q)
         m["key_quotes"] = kept
 
-    reduce_resp = await openai_chat(
-        client,
-        model=chat_model(),
-        messages=[{"role": "user", "content": build_reduce_prompt(query, mapped)}],
-        temperature=0.2,
-    )
-    content = (reduce_resp.choices[0].message.content or "").strip()
+    content = (await _complete(build_reduce_prompt(query, mapped), 0.2, json_mode=False)).strip()
     if not content:
         return None
 

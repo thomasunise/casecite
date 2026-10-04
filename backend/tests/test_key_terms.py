@@ -4,7 +4,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from app.services.contract_analysis.key_terms import _collect_excerpts, extract_key_terms
 
 CONTRACT = (

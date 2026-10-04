@@ -5,6 +5,8 @@ export interface Connector {
   color: string;
   connected: boolean;
   configured?: boolean;
+  /** Uses one firm-wide credential, so only administrators may connect or sync it. */
+  adminOnly?: boolean;
   docs: number;
 }
 

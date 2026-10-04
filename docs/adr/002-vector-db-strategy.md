@@ -1,8 +1,10 @@
 # ADR-002: Vector Database Strategy
 
-**Status:** Accepted
-**Date:** 2025-01-15
+**Status:** Accepted — revised 2026-10-04 to match the code as shipped
+**Date:** Recorded 2026-05-03 (the decision predates the record)
 **Decision makers:** Core maintainers
+
+> **Revision note (2026-10-04).** The original "scaling path" said switching to Pinecone allows multiple workers. It does not: the session store, document registry and connector caches are also process-local, and the app refuses to start with more than one worker whatever `VECTOR_DB` is (see docs/deployment.md, "Scaling Considerations"). The description of keyword search was also wrong. Both are corrected below.
 
 ## Context
 
@@ -56,18 +58,18 @@ Provider selection follows BYOK: if a user provides a Voyage AI key in Settings,
 
 ### Negative
 
-- **ChromaDB limits horizontal scaling.** ChromaDB uses SQLite internally, which does not support concurrent writes from multiple processes. This forces the production deployment to run a single uvicorn worker, capping throughput at ~200-400 req/s.
+- **ChromaDB limits horizontal scaling.** ChromaDB uses SQLite internally, which does not support concurrent writes from multiple processes. It is one of several reasons the deployment runs a single uvicorn worker.
 - **Dimension mismatch risk.** If a user changes embedding providers (e.g., OpenAI 1536-dim to Voyage 1024-dim), existing vectors become incompatible. The platform includes diagnostic endpoints to detect this, but recovery requires clearing and re-indexing all documents.
 - **Two backends to maintain.** Bug fixes, new features, and filter syntax must be implemented in both `ChromaDB` and `PineconeDB` classes. Metadata handling differs (Pinecone truncates to 1000 bytes).
-- **No hybrid search in Pinecone.** ChromaDB supports distance-based search only. The BM25 keyword component of hybrid search runs separately against PostgreSQL, not the vector DB. This coupling isn't captured in the abstraction.
+- **Keyword scoring is a rescoring step, not a second index.** Both backends do distance-based search only. The BM25 rescoring runs in the application over the candidates the vector search returned (`services/search.py`); a term that appears only in chunks outside those candidates is not found. No cross-encoder or API reranker ships.
+- **Pinecone stores document text off-site.** Chunk text is written to Pinecone as vector metadata, so choosing Pinecone moves document text to a third party (see docs/subprocessors.md). The Pinecone backend is also less exercised than Chroma; treat it as optional.
 
 ### Scaling path
 
-To unlock horizontal scaling:
-1. Set `VECTOR_DB=pinecone` and provide API credentials
-2. Increase `UVICORN_WORKERS` in `start.sh` (no longer constrained by SQLite locking)
-3. Deploy multiple backend instances behind a load balancer
-4. PostgreSQL and Redis already support multi-instance deployments
+Switching to Pinecone removes one of the single-process constraints, not all of them. Horizontal scaling additionally needs the session store, the document registry and the connector caches moved out of the process (Redis/PostgreSQL) — tracked in `ROADMAP.md`. Until then the app enforces a single worker:
+1. Move the process-local stores to Redis/PostgreSQL (not done)
+2. Set `VECTOR_DB=pinecone` and provide API credentials
+3. Raise `UVICORN_WORKERS` and deploy multiple backend instances behind a load balancer
 
 ### Alternatives rejected
 

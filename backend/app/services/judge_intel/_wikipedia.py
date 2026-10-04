@@ -2,21 +2,74 @@
 
 import logging
 import re
+import unicodedata
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
+_JUDICIAL_RE = re.compile(r"\b(judge|justice|jurist|magistrate|judiciary)\b", re.IGNORECASE)
+_YEAR_RE = re.compile(r"\b(1[6-9]\d{2}|20\d{2})\b")
+# How many name-matching search hits to inspect before giving up.
+_MAX_CANDIDATES = 3
+
+
+def _name_tokens(text: str) -> list[str]:
+    folded = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+    return re.findall(r"[a-z]+", folded.lower())
+
+
+def title_matches_judge(title: str, judge_name: str) -> bool:
+    """True when a Wikipedia page title names this person.
+
+    The whole last name must appear, and the first name (or its initial) too:
+    a shared surname is not a match.
+    """
+    name = _name_tokens(judge_name)
+    if len(name) < 2:
+        return False
+    # Drop a trailing disambiguator such as "(judge)" before comparing.
+    page = _name_tokens(re.sub(r"\s*\([^)]*\)\s*$", "", title))
+    first, last = name[0], name[-1]
+    if last not in page:
+        return False
+    return any(
+        t == first or (len(t) == 1 and first.startswith(t)) or (len(first) == 1 and t[0] == first)
+        for t in page
+        if t != last
+    )
+
+
+def intro_describes_judge(intro: str | None, birth_year: int | None = None) -> bool:
+    """True when a page's opening describes a judge — and, when the birth year
+    is known and the page states one, the same person."""
+    if not intro:
+        return False
+    opening = intro[:1500]
+    if not _JUDICIAL_RE.search(opening):
+        return False
+    if birth_year:
+        dates = re.search(r"\(([^)]*)\)", opening[:400])
+        years = _YEAR_RE.findall(dates.group(1)) if dates else []
+        if years and int(years[0]) != birth_year:
+            return False
+    return True
+
 
 class WikipediaMixin:
     """Wikipedia data fetching for judge biographies."""
 
     async def fetch_wikipedia_data(
-        self, judge_name: str, judge_title: str = "judge"
+        self, judge_name: str, judge_title: str = "judge", birth_year: int | None = None
     ) -> dict[str, Any]:
         """
         Fetch comprehensive biographical data from Wikipedia.
+
+        A page is used only when its title names this person AND its opening
+        describes a judge (and matches ``birth_year`` when both are known).
+        Anything less returns the empty result: showing no biography is fine,
+        showing a namesake's is not.
 
         Returns dict with:
         - url: Wikipedia page URL
@@ -67,44 +120,40 @@ class WikipediaMixin:
                     search_data = resp.json()
                     search_results = search_data.get("query", {}).get("search", [])
 
-                if not search_results:
-                    return result
-
-                # Find the best match (prefer titles containing the judge's last name)
-                last_name = search_name.split()[-1].lower() if search_name else ""
+                # Step 2: Among the hits whose title names this person, take the
+                # first whose opening actually describes a judge.
+                candidates = [
+                    sr.get("title", "")
+                    for sr in search_results
+                    if title_matches_judge(sr.get("title", ""), search_name)
+                ][:_MAX_CANDIDATES]
                 page_title = None
-                for sr in search_results:
-                    title = sr.get("title", "")
-                    if last_name in title.lower():
+                for title in candidates:
+                    summary_params = {
+                        "action": "query",
+                        "titles": title,
+                        "prop": "extracts",
+                        "exintro": True,
+                        "explaintext": True,
+                        "format": "json",
+                    }
+                    resp = await client.get(search_url, params=summary_params)
+                    if resp.status_code != 200:
+                        continue
+                    pages = resp.json().get("query", {}).get("pages", {})
+                    intro = next(
+                        (pc.get("extract", "") for pid, pc in pages.items() if pid != "-1"), ""
+                    )
+                    if intro_describes_judge(intro, birth_year):
                         page_title = title
+                        result["summary"] = intro
                         break
 
                 if not page_title:
-                    page_title = search_results[0].get("title")
-
-                if not page_title:
+                    logger.info(f"No confirmed Wikipedia page for judge {judge_name}")
                     return result
 
                 result["url"] = f"https://en.wikipedia.org/wiki/{page_title.replace(' ', '_')}"
-
-                # Step 2: Get page summary
-                summary_params = {
-                    "action": "query",
-                    "titles": page_title,
-                    "prop": "extracts",
-                    "exintro": True,
-                    "explaintext": True,
-                    "format": "json",
-                }
-
-                resp = await client.get(search_url, params=summary_params)
-                if resp.status_code == 200:
-                    summary_data = resp.json()
-                    pages = summary_data.get("query", {}).get("pages", {})
-                    for page_id, page_content in pages.items():
-                        if page_id != "-1":
-                            result["summary"] = page_content.get("extract", "")
-                            break
 
                 # Step 3: Get full page content with sections
                 content_params = {
@@ -136,6 +185,7 @@ class WikipediaMixin:
                             break
 
             except (
+                httpx.HTTPError,
                 ValueError,
                 KeyError,
                 ConnectionError,

@@ -42,8 +42,7 @@ class TestAuthentication:
             prod_settings = Settings()
             assert not prod_settings.debug
 
-        # The dev login route reads app.config.settings at request time and
-        # must fail closed (403) unless debug is true.
+        # The dev login route must fail closed (403) unless debug is true.
         prod_like = MagicMock(wraps=settings)
         prod_like.debug = False
         # Bypass the login rate limiter for this request: earlier tests in the
@@ -51,7 +50,7 @@ class TestAuthentication:
         # test asserts the 403 fail-closed gate, not the (separately tested)
         # 429 rate limit.
         with (
-            patch("app.config.settings", prod_like),
+            patch("app.routers.auth.settings", prod_like),
             patch(
                 "app.middleware.security.RateLimiter.is_allowed",
                 return_value=(True, {"limit": 100, "remaining": 99}),
@@ -438,33 +437,21 @@ class TestErrorHandling:
     """Test that errors don't leak sensitive information."""
 
     def test_error_handler_hides_internal_details(self):
-        """Test that the error handler returns safe messages."""
-        from app.utils.error_handler import safe_error_response
+        """The router error helper returns a safe message, never the exception text."""
+        import logging
 
-        # Internal exception with sensitive info
-        internal_exception = Exception("Database connection failed: password=secret123")
+        from app.utils.error_handler import handle_service_error
 
-        response = safe_error_response(
-            status_code=500,
-            user_message="An error occurred",
-            exception=internal_exception,
+        internal_exception = OSError("Database connection failed: password=secret123")
+
+        response = handle_service_error(
+            internal_exception, "Failed to process document", logging.getLogger("test")
         )
 
-        # The response should not contain the password
+        assert response.status_code == 500
+        assert response.detail == "Failed to process document. Please try again."
         assert "secret123" not in response.detail
         assert "password" not in response.detail.lower()
-
-    def test_error_reference_generated(self):
-        """Test that error references are generated for 500 errors."""
-        from app.utils.error_handler import safe_error_response
-
-        response = safe_error_response(
-            status_code=500,
-            user_message="An error occurred",
-            exception=Exception("test"),
-        )
-
-        assert "ERR-" in response.detail
 
 
 class TestMultiWorkerGuard:
@@ -509,3 +496,107 @@ class TestMultiWorkerGuard:
         env = {k: v for k, v in os.environ.items() if k != "UVICORN_WORKERS"}
         with patch.dict(os.environ, env, clear=True):
             check_single_process_deployment()
+
+
+class TestRateLimitBuckets:
+    """Limits are counted per route, not per literal URL: identifier segments
+    are collapsed so every document/job/session id draws on ONE quota."""
+
+    @staticmethod
+    def _limiter():
+        from app.middleware.security import RateLimiter
+
+        return RateLimiter()
+
+    def test_ids_are_collapsed(self):
+        from app.middleware.security import rate_limit_bucket
+
+        assert (
+            rate_limit_bucket("/api/v1/documents/3f2b8c1e-1111-2222-3333-444455556666/file")
+            == "/api/v1/documents/{id}/file"
+        )
+        assert rate_limit_bucket("/api/v1/contract-analysis/analyses/42/export") == (
+            "/api/v1/contract-analysis/analyses/{id}/export"
+        )
+        assert rate_limit_bucket("/api/v1/jobs/0123456789abcdef0123") == "/api/v1/jobs/{id}"
+
+    def test_route_names_are_not_collapsed(self):
+        from app.middleware.security import rate_limit_bucket
+
+        for path in (
+            "/api/v1/auth/mfa/recovery-codes",
+            "/api/v1/auth/verify-reset-token",
+            "/api/v1/workspace-sessions",
+            "/api/v1/contract-analysis/draft/generate",
+        ):
+            assert rate_limit_bucket(path) == path
+
+    def test_different_ids_share_one_quota(self):
+        import uuid
+
+        limiter = self._limiter()
+        limit, _window = limiter._get_limit("/api/v1/documents/x")
+        allowed = 0
+        for _ in range(limit + 10):
+            ok, _info = limiter.is_allowed("203.0.113.7", f"/api/v1/documents/{uuid.uuid4()}")
+            allowed += ok
+        assert allowed == limit
+
+    def test_other_clients_and_routes_are_unaffected(self):
+        import uuid
+
+        limiter = self._limiter()
+        limit, _window = limiter._get_limit("/api/v1/documents/x")
+        for _ in range(limit):
+            limiter.is_allowed("203.0.113.8", f"/api/v1/documents/{uuid.uuid4()}")
+        assert limiter.is_allowed("203.0.113.8", f"/api/v1/documents/{uuid.uuid4()}")[0] is False
+        assert limiter.is_allowed("203.0.113.9", f"/api/v1/documents/{uuid.uuid4()}")[0] is True
+        assert limiter.is_allowed("203.0.113.8", "/api/v1/settings/rag")[0] is True
+
+    def test_most_specific_rule_wins(self):
+        limiter = self._limiter()
+        limiter.limits = {
+            "default": (100, 60),
+            "/api/v1/auth": (50, 60),
+            "/api/v1/auth/login": (3, 300),
+        }
+        assert limiter._get_limit("/api/v1/auth/login") == (3, 300)
+        assert limiter._get_limit("/api/v1/auth/me") == (50, 60)
+        assert limiter._get_limit("/api/v1/auth/login-history") == (50, 60)
+        assert limiter._get_limit("/api/v1/other") == (100, 60)
+
+    def test_every_rule_names_a_real_route(self, app):
+        """A rule for a route that does not exist is dead configuration."""
+        limiter = self._limiter()
+        paths = set(app.openapi()["paths"])
+        for pattern in limiter.limits:
+            if pattern == "default":
+                continue
+            assert any(p == pattern or p.startswith(pattern + "/") for p in paths), pattern
+
+    def test_mfa_management_endpoints_are_tightly_limited(self):
+        limiter = self._limiter()
+        for path in (
+            "/api/v1/auth/mfa/verify",
+            "/api/v1/auth/mfa/enable",
+            "/api/v1/auth/mfa/disable",
+            "/api/v1/auth/mfa/recovery-codes",
+        ):
+            assert limiter._get_limit(path) == (5, 300), path
+
+
+class TestEnvironmentDebugContradiction:
+    def test_production_environment_with_debug_is_refused(self):
+        from app.config import Settings
+
+        with (
+            patch.dict("os.environ", {"DEBUG": "true", "ENVIRONMENT": "production"}),
+            pytest.raises(ValueError, match="ENVIRONMENT is production but DEBUG=true"),
+        ):
+            Settings()
+
+    def test_development_environment_with_debug_is_fine(self):
+        from app.config import Settings
+
+        with patch.dict("os.environ", {"DEBUG": "true", "ENVIRONMENT": "development"}):
+            assert Settings().debug is True

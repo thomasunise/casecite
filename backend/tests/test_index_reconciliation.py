@@ -137,9 +137,8 @@ class TestSearchUnavailable:
         with patch(
             "app.services.rag.search.embedding_service.embed_query",
             new=AsyncMock(side_effect=ValueError("Error code: 401 - invalid_api_key")),
-        ):
-            with pytest.raises(SearchUnavailableError) as exc:
-                await search_documents(vector_db, "any query", user_id="u1")
+        ), pytest.raises(SearchUnavailableError) as exc:
+            await search_documents(vector_db, "any query", user_id="u1")
         assert "api key" in str(exc.value).lower()
         vector_db.search.assert_not_called()
 
@@ -149,9 +148,8 @@ class TestSearchUnavailable:
         with patch(
             "app.services.rag.search.embedding_service.embed_query",
             new=AsyncMock(side_effect=ConnectionError("connection reset")),
-        ):
-            with pytest.raises(SearchUnavailableError) as exc:
-                await search_documents(vector_db, "any query", user_id="u1")
+        ), pytest.raises(SearchUnavailableError) as exc:
+            await search_documents(vector_db, "any query", user_id="u1")
         assert "embedding" in str(exc.value).lower()
 
 

@@ -17,9 +17,11 @@ Object.assign(api, {
     return resp.blob();
   },
 
-  async query(message: string, mode: string, options: ChatQueryOptions = {}): Promise<ChatResponse> {
+  async query(message: string, mode: string, options: ChatQueryOptions = {}, signal?: AbortSignal): Promise<ChatResponse> {
     return api.request('/chat', {
       method: 'POST',
+      // Lets the user cancel a long-running answer.
+      signal,
       // Strategy briefs and verified case-law answers read full opinions from
       // CourtListener — routinely past the 30s default abort. Give chat a
       // real budget; the backend bounds its own case-law stage.

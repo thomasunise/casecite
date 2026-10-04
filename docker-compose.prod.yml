@@ -7,6 +7,13 @@
 # and `CASECITE_TAG=<sha> ... up -d` rolls back to any earlier build. To build
 # from source instead: `docker compose -f docker-compose.prod.yml up -d --build`
 # (the local build is tagged with the same name).
+#
+# Encryption at rest: client text lives in THREE named volumes, not one —
+# rag_data (uploads, vector index, audit logs), postgres_data (chat history,
+# analyses, clause text) and redis_data (job results, revocation and lockout keys). Put all
+# of /var/lib/docker/volumes (or each volume's backing device) on an encrypted
+# disk (LUKS or provider disk encryption) before setting
+# DISK_ENCRYPTION_ACKNOWLEDGED=true.
 
 services:
   # Caddy - Automatic HTTPS reverse proxy
@@ -57,7 +64,17 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    # noeviction, not an LRU policy: Redis holds revoked-token markers,
+    # deleted-user tombstones, account-lockout counters and consumed MFA
+    # challenges. Under allkeys-lru (or volatile-lru — these keys all carry
+    # TTLs) memory pressure silently drops them, which revives logged-out
+    # tokens and resets lockouts. With noeviction a full instance rejects new
+    # writes instead, and the app fails closed. Everything the app stores has a
+    # TTL, so memory is reclaimed by expiry; raise --maxmemory if job results
+    # fill it.
+    # (The password is passed as an argument, so it is visible to `ps` inside
+    # this container only; the network is not published to the host.)
+    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -93,10 +110,16 @@ services:
       - CHROMA_PERSIST_DIR=/app/data/chroma
       - UPLOAD_DIR=/app/data/uploads
       - CORS_ORIGINS=${CORS_ORIGINS:-https://${DOMAIN:-localhost}}
-      - ALLOWED_HOSTS=${DOMAIN:-localhost}
-      # Confirm the /app/data volume is on an encrypted disk (LUKS/BitLocker/
-      # FileVault or provider disk encryption). Derived privileged text is stored
-      # in cleartext; the app refuses to start until this is set to true.
+      # Defaults to DOMAIN; set ALLOWED_HOSTS in .env to serve extra hostnames
+      # (comma-separated). Loopback is always allowed for the healthcheck.
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-${DOMAIN:-localhost}}
+      # The backup key must never reach the app container even if an operator
+      # leaves it in .env (env_file above injects that whole file).
+      - BACKUP_ENCRYPTION_KEY=
+      # Confirm the Docker volumes (rag_data, postgres_data, redis_data — see the
+      # header) are on an encrypted disk (LUKS or provider disk encryption).
+      # Derived privileged text is stored in cleartext; the app refuses to
+      # start until this is set to true.
       - DISK_ENCRYPTION_ACKNOWLEDGED=${DISK_ENCRYPTION_ACKNOWLEDGED:?enable full-disk encryption on the data volume, then set to true}
       # Must be an IP or CIDR (hostnames are not parseable). Matches the pinned
       # casecite_network subnet below so Caddy's X-Forwarded-For is honored.
@@ -111,10 +134,13 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # uvicorn directly (Caddy proxies to backend:8000, not to the image's nginx)
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+      # Migrations and first-boot seeding run before uvicorn listens.
+      start_period: 90s
     networks:
       - casecite_network
     deploy:

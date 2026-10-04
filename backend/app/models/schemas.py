@@ -378,10 +378,20 @@ class RAGSettings(BaseModel):
     dimensions: int = Field(default=1536, ge=256, le=4096)
     chunk_size: int = Field(default=512, ge=100, le=2000)
     chunk_overlap: int = Field(default=128, ge=0, le=500)
-    similarity_threshold: float = Field(default=0.55, ge=0.0, le=1.0)
+    # Same default as settings.similarity_threshold. With text-embedding-3-* a
+    # relevant chunk scores ~0.30-0.50, so the old 0.55 default put every real
+    # match below the floor for users who had never saved their settings.
+    similarity_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     top_k: int = Field(default=10, ge=1, le=100)
+    # Cross-encoder reranking. Effective only when the optional
+    # sentence-transformers package is installed on the server; otherwise the
+    # toggle is ignored and results keep their similarity / keyword order.
     enable_reranking: bool = True
+    # Blend a BM25 keyword score over the vector-search candidates into the
+    # ranking (rescoring, not a separate keyword index).
     hybrid_search: bool = True
+    # Flag which retrieved passages the answer actually draws on. Does not
+    # approve citations — review status stays with the reviewer.
     citation_verification: bool = True
     context_compression: bool = False
     query_expansion: bool = True
@@ -523,6 +533,8 @@ class AdminUserItem(BaseModel):
     name: str
     roles: list[str]
     is_active: bool
+    mfa_enabled: bool = False
+    must_change_password: bool = False
     created_at: datetime | None = None
     last_login: datetime | None = None
 
@@ -606,9 +618,15 @@ class MfaEnableResponse(BaseModel):
 
 
 class MfaDisableRequest(BaseModel):
-    """Disable MFA by proving a current TOTP (or recovery) code."""
+    """Disable MFA by proving a current TOTP (or recovery) code AND the password.
+
+    ``password`` is required for accounts that have a local password, so a
+    hijacked session alone cannot strip the second factor. SSO-only accounts
+    (no local password) omit it.
+    """
 
     code: str = Field(..., min_length=6, max_length=20)
+    password: str | None = Field(default=None, max_length=1024)
 
 
 class MfaVerifyRequest(BaseModel):
@@ -636,6 +654,11 @@ class AuditVerifyResponse(BaseModel):
     valid: bool
     entries_checked: int
     first_invalid_id: str | None = None
+    reason: str | None = None
+    # Entries written before chain linkage was enforced (signature checked only)
+    legacy_entries: int = 0
+    # True when the range held more entries than one verification scans
+    truncated: bool = False
 
 
 # =============================================================================
@@ -667,7 +690,38 @@ class BrandingUpdate(BaseModel):
     )
     accent_color: str | None = Field(None, max_length=20, description="Accent color (hex)")
     favicon_url: str | None = Field(None, max_length=500, description="URL of the favicon")
-    custom_css: str | None = Field(None, description="Additional CSS injected into the frontend")
+    custom_css: str | None = Field(
+        None, max_length=50_000, description="Additional CSS injected into the frontend"
+    )
+
+    @field_validator("logo_url", "favicon_url")
+    @classmethod
+    def _safe_image_url(cls, v: str | None) -> str | None:
+        """Same-origin path or https URL only ("" clears the value).
+
+        These land in <img src> / <link href> on the public login page, so
+        javascript:, data: and plain-http URLs are refused.
+        """
+        if not v:
+            return v
+        v = v.strip()
+        same_origin = v.startswith("/") and not v.startswith("//") and "\\" not in v
+        if not (same_origin or v.lower().startswith("https://")):
+            raise ValueError("must be an https:// URL or a path starting with /")
+        if any(ch.isspace() or ch in "\"'<>" for ch in v):
+            raise ValueError("contains characters that are not allowed in a URL")
+        return v
+
+    @field_validator("primary_color", "secondary_color", "accent_color")
+    @classmethod
+    def _hex_color(cls, v: str | None) -> str | None:
+        """Hex colours only — the value is interpolated into CSS."""
+        if v is None:
+            return v
+        v = v.strip()
+        if not re.fullmatch(r"#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})", v):
+            raise ValueError("must be a hex colour such as #1A2B3C")
+        return v
 
 
 # =============================================================================
@@ -741,6 +795,16 @@ class DraftGenerateRequest(BaseModel):
     reference_document_ids: list[str] | None = Field(None, max_length=4)
     plan: dict = Field(..., description="The plan from /draft/plan, as edited by the user")
 
+    @field_validator("plan")
+    @classmethod
+    def _bounded_plan(cls, v: dict) -> dict:
+        """A plan is a section outline, not a document — cap what gets queued."""
+        import json
+
+        if len(json.dumps(v, default=str)) > 200_000:
+            raise ValueError("plan is too large")
+        return v
+
 
 class PracticeProfileRequest(BaseModel):
     practice_area: str = Field(..., min_length=2, max_length=200)
@@ -768,8 +832,15 @@ class RedlineExportRequest(BaseModel):
     """POST body for redline export: rejected refs plus the user's own edits
     to proposed text (ref -> replacement wording)."""
 
-    exclude: list[str] = Field(default_factory=list)
-    overrides: dict[str, str] = Field(default_factory=dict)
+    exclude: list[str] = Field(default_factory=list, max_length=2000)
+    overrides: dict[str, str] = Field(default_factory=dict, max_length=2000)
+
+    @field_validator("overrides")
+    @classmethod
+    def _bounded_overrides(cls, v: dict[str, str]) -> dict[str, str]:
+        if any(len(k) > 200 or len(text) > 100_000 for k, text in v.items()):
+            raise ValueError("an override is too large")
+        return v
 
 
 # =============================================================================

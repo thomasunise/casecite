@@ -80,6 +80,9 @@ async def send_password_reset_email(to_email: str, reset_url: str) -> bool:
         )
         logger.info("Password reset email sent")
         return True
-    except (ValueError, KeyError, OSError, RuntimeError) as e:
-        logger.error(f"Failed to send password reset email: {e}")
+    except Exception as e:  # Intentional broad catch - delivery must never raise
+        # SendGrid's client raises python_http_client exceptions (and urllib
+        # errors) that share no base class narrower than Exception. Log only the
+        # type: the message can echo the recipient address or the request body.
+        logger.error("Failed to send password reset email: %s", type(e).__name__)
         return False

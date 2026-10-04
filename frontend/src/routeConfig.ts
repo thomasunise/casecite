@@ -25,7 +25,7 @@ export const MODE_TO_ROUTE: Record<string, string> = {
  * Derive the activeMode string from a pathname.
  */
 export function modeFromPath(pathname: string): string {
-  // Check /case/:id
-  if (pathname.startsWith('/case')) return 'case';
+  // /case and /case/:id — but not /case-citations, which has its own entry.
+  if (pathname === '/case' || pathname.startsWith('/case/')) return 'case';
   return ROUTE_TO_MODE[pathname] || 'research';
 }

@@ -67,18 +67,35 @@ describe('useKeyboardShortcuts', () => {
     expect(opts.setRightSidebarCollapsed).toHaveBeenCalled();
   });
 
-  it('Ctrl+1 switches to first mode', () => {
+  it('Ctrl+Shift+1 switches to first mode', () => {
     const opts = createOptions();
     renderHook(() => useKeyboardShortcuts(opts));
-    fireKey('1', { ctrlKey: true });
+    fireKey('!', { ctrlKey: true, shiftKey: true, code: 'Digit1' });
     expect(opts.setActiveMode).toHaveBeenCalledWith('research');
   });
 
-  it('Ctrl+4 switches to fourth mode', () => {
+  it('Ctrl+Shift+4 switches to fourth mode', () => {
     const opts = createOptions();
     renderHook(() => useKeyboardShortcuts(opts));
-    fireKey('4', { ctrlKey: true });
+    fireKey('$', { ctrlKey: true, shiftKey: true, code: 'Digit4' });
     expect(opts.setActiveMode).toHaveBeenCalledWith('clauses');
+  });
+
+  it('leaves the browser-owned shortcuts alone (Ctrl+1 tab switch, Ctrl+P print)', () => {
+    const opts = createOptions();
+    const printSpy = vi.spyOn(window, 'print').mockImplementation(() => {});
+    renderHook(() => useKeyboardShortcuts(opts));
+
+    const tabSwitch = new KeyboardEvent('keydown', { key: '1', code: 'Digit1', ctrlKey: true, cancelable: true });
+    window.dispatchEvent(tabSwitch);
+    const print = new KeyboardEvent('keydown', { key: 'p', code: 'KeyP', ctrlKey: true, cancelable: true });
+    window.dispatchEvent(print);
+
+    expect(opts.setActiveMode).not.toHaveBeenCalled();
+    expect(printSpy).not.toHaveBeenCalled();
+    expect(tabSwitch.defaultPrevented).toBe(false);
+    expect(print.defaultPrevented).toBe(false);
+    printSpy.mockRestore();
   });
 
   it('removes listener on unmount', () => {
@@ -91,8 +108,11 @@ describe('useKeyboardShortcuts', () => {
   });
 
   it('SHORTCUTS_LIST has expected entries', () => {
-    expect(SHORTCUTS_LIST.length).toBeGreaterThanOrEqual(7);
+    expect(SHORTCUTS_LIST.length).toBeGreaterThanOrEqual(6);
     const descriptions = SHORTCUTS_LIST.map(s => s.description);
+    expect(descriptions).not.toContain('Print current view');
+    // The advertised range matches the number of modes that actually exist.
+    expect(SHORTCUTS_LIST.find(s => s.description === 'Switch analysis mode')?.keys).toEqual(['Ctrl', 'Shift', '1-3']);
     expect(descriptions).toContain('Focus search input');
     expect(descriptions).toContain('Close modal / panel');
   });

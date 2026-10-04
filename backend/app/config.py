@@ -11,6 +11,26 @@ logger = logging.getLogger(__name__)
 # Prefixes that indicate a placeholder value, not a real secret  # nosec B105
 _PLACEHOLDER_PREFIXES = ("change-me", "REPLACE_WITH", "REPLACE-ME", "your-", "sk-your")
 
+# Shapes of the example API keys shipped in .env.example and setup templates.
+_PLACEHOLDER_API_KEY_PREFIXES = (
+    "your-",
+    "your_",
+    "sk-your",
+    "sk-ant-your",
+    "pa-your",
+    "change-me",
+    "changeme",
+    "replace",
+    "<",
+)
+
+
+def is_placeholder_api_key(value: str | None) -> bool:
+    """True for an example/placeholder API key that was never filled in."""
+    val = (value or "").strip().lower()
+    return bool(val) and val.startswith(_PLACEHOLDER_API_KEY_PREFIXES)
+
+
 # Settings removed with the public-demo posture; still present in older .env files.
 _REMOVED_SETTINGS = frozenset(
     {
@@ -25,16 +45,14 @@ _REMOVED_SETTINGS = frozenset(
 
 class Settings(BaseSettings):
     # App
-    app_name: str = "CaseCite RAG"
+    app_name: str = "CaseCite"
     app_display_name: str = "CaseCite"
     debug: bool = False
     environment: str = "development"
     api_prefix: str = "/api/v1"
 
-    # Branding / Contact emails (override for white-label deployments)
+    # Sender address for outbound email (override for white-label deployments)
     noreply_email: str = "noreply@casecite.com"
-    support_email: str = "support@casecite.com"
-    security_email: str = "security@casecite.com"
 
     # Explicit flag to disable CSRF (must be True WITH debug=True to skip CSRF)
     csrf_disabled: bool = False
@@ -48,11 +66,16 @@ class Settings(BaseSettings):
     # account. Enable deliberately (ALLOW_REGISTRATION=true) for trusted networks.
     # In debug (local development), registration is always open for convenience.
     allow_registration: bool = False
-    # Optional token required to create the FIRST (admin) account on a fresh
-    # install. Set REGISTRATION_BOOTSTRAP_TOKEN to prevent an attacker who reaches
-    # the instance before you from seizing the first-user-is-admin slot. When
-    # unset, the first registration is allowed (bootstrap before exposing publicly).
+    # Token required to create the FIRST (admin) account on a fresh install, so
+    # an attacker who reaches the instance before you cannot seize the
+    # first-user-is-admin slot. In production (DEBUG=false) the first registration
+    # is REFUSED until REGISTRATION_BOOTSTRAP_TOKEN is set and supplied; in local
+    # development it is optional.
     registration_bootstrap_token: str = ""
+
+    # Require every password account to enrol TOTP MFA before using the API
+    # (SSO-only accounts rely on the identity provider's MFA policy).
+    require_mfa: bool = False
 
     # Frontend URL for password reset emails (e.g., https://app.casecite.com)
     frontend_url: str = ""
@@ -76,6 +99,13 @@ class Settings(BaseSettings):
     # on refresh. Opt in with ENFORCE_SESSION_IP_BINDING=true only when the
     # client IP is guaranteed stable end-to-end.
     enforce_session_ip_binding: bool = False
+
+    # Absolute session lifetime: a sign-in ends this long after it started no
+    # matter how often the token is refreshed (the user signs in again).
+    session_absolute_timeout_hours: int = 8
+    # Idle timeout: a session with no authenticated request for this long is
+    # ended. 0 disables the idle check (the absolute lifetime still applies).
+    session_idle_timeout_minutes: int = 120
 
     # Database (PostgreSQL for production, SQLite for development)
     # Set DATABASE_URL for production: postgresql+asyncpg://user:pass@host:5432/casecite
@@ -166,22 +196,30 @@ class Settings(BaseSettings):
                 logger.warning("Could not persist instance secrets to %s: %s", secrets_file, e)
         return data
 
-    @field_validator("openai_api_key", "anthropic_api_key", "voyage_api_key", mode="before")
+    @field_validator(
+        "openai_api_key",
+        "anthropic_api_key",
+        "voyage_api_key",
+        "cohere_api_key",
+        "pinecone_api_key",
+        mode="before",
+    )
     @classmethod
     def _ignore_garbage_keys(cls, v, info):
-        """Treat a mangled env key as NO key (runs before the frozen model is built).
+        """Treat a mangled or placeholder env key as NO key (runs before the frozen model is built).
 
-        A lone "#" (a commented .env line pasted into an env panel) or similar
-        debris must not masquerade as a configured provider — it makes every
-        fallback call fail with a baffling provider 401 instead of a clear
-        "no key configured", and breaks BYOK-only instances whose real keys
-        live in the app's Settings. A real key never starts with "#" and is
-        never this short.
+        A lone "#" (a commented .env line pasted into an env panel), similar
+        debris, or an untouched .env.example placeholder ("sk-your-…",
+        "your-voyage-api-key") must not masquerade as a configured provider —
+        it makes every fallback call fail with a baffling provider 401 instead
+        of a clear "no key configured", and breaks BYOK-only instances whose
+        real keys live in the app's Settings. A real key never starts with "#",
+        is never this short, and never reads "your-…".
         """
         if v is None:
             return v
         val = str(v).strip()
-        if val and (val.startswith("#") or len(val) <= 2):
+        if val and (val.startswith("#") or len(val) <= 2 or is_placeholder_api_key(val)):
             logger.warning(
                 f"{info.field_name.upper()} is set to an obviously invalid value "
                 f"({val[:4]!r}…) — ignoring it. Remove the stray value from the "
@@ -229,6 +267,16 @@ class Settings(BaseSettings):
                 "CONFIGURATION ERROR: REDIS_URL must be set for production. "
                 "Redis is required for distributed rate limiting and session management. "
                 "Set REDIS_URL=redis://host:6379/0 for production deployments."
+            )
+
+        # ENVIRONMENT is declarative; DEBUG is what actually relaxes security
+        # (dev login, open registration, auto-generated secrets, verbose errors).
+        # Refuse the contradictory pair rather than run "production" wide open.
+        if self.debug and self.environment.strip().lower() in ("production", "prod"):
+            raise ValueError(
+                "CONFIGURATION ERROR: ENVIRONMENT is production but DEBUG=true. DEBUG "
+                "enables the dev login, open registration and verbose errors and must "
+                "be false in production. Set DEBUG=false (or ENVIRONMENT=development)."
             )
 
         # Warn when DEBUG disables CSRF protection
@@ -318,6 +366,16 @@ class Settings(BaseSettings):
     # legal text) or a voyage-4 model with a Voyage key. NOTE: changing the embedding model changes
     # vector dimensions/space and requires re-indexing existing documents.
     embedding_model: str = "text-embedding-3-small"
+    # Send embeddings to an OpenAI-compatible server you run (Ollama, vLLM,
+    # text-embeddings-inference) instead of a hosted provider, so document text
+    # is embedded on your own network. When set, ALL embeddings go here using
+    # EMBEDDING_MODEL, and Voyage/Cohere keys are not used for embeddings.
+    # Unset: embeddings go to OpenAI / Voyage / Cohere as configured above
+    # (OPENAI_BASE_URL does NOT redirect embeddings). Requires re-indexing.
+    embedding_base_url: str | None = None
+    # Vector size of EMBEDDING_MODEL when it is not one of the built-in models
+    # (only needed to create a Pinecone index for a self-hosted model).
+    embedding_dimensions: int | None = None
 
     # Cohere (Alternative Embeddings)
     cohere_api_key: str | None = None
@@ -342,10 +400,15 @@ class Settings(BaseSettings):
     # product reads as "your documents don't exist". 0.25 keeps junk out
     # without strangling recall.
     similarity_threshold: float = 0.25
-    rerank_enabled: bool = True  # Enable cross-encoder reranking
-    rerank_top_k: int = 20  # Retrieve more, then rerank to top_k
-    hybrid_search_enabled: bool = True  # Combine semantic + keyword search
-    keyword_weight: float = 0.3  # Weight for BM25 keyword matching
+    # Cross-encoder reranking runs ONLY when the optional sentence-transformers
+    # package is installed (it is not in requirements.txt). Without it this
+    # flag has no effect: results keep their similarity / keyword-blended order.
+    rerank_enabled: bool = True
+    rerank_top_k: int = 20  # Candidate pool size for keyword rescoring / reranking
+    # "Hybrid" = BM25 keyword rescoring of the vector-search candidates (there
+    # is no separate keyword index).
+    hybrid_search_enabled: bool = True
+    keyword_weight: float = 0.3  # Weight of the BM25 score in the blended ranking
 
     # API Resilience Settings
     api_retry_attempts: int = 3
@@ -398,7 +461,10 @@ class Settings(BaseSettings):
     # IMANAGE_REDIRECT_URI is required for production - no localhost fallback
     imanage_redirect_uri: str = os.environ.get("IMANAGE_REDIRECT_URI", "")
 
-    # Connector: Filevine (API key + secret; session handshake, not OAuth)
+    # Connector: Filevine (API key + secret; session handshake, not OAuth).
+    # The key is firm-wide, so the connector stays off until FILEVINE_ENABLED
+    # is set, and is then usable only by users holding admin.settings.
+    filevine_enabled: bool = False
     filevine_api_key: str | None = None
     filevine_api_secret: str | None = None
     filevine_base_url: str = "https://api.filevine.io"
@@ -443,10 +509,29 @@ class Settings(BaseSettings):
     # Max jobs executing concurrently. Bounds memory/connection use so a burst of
     # submissions (LLM + CourtListener fan-out) can't exhaust the API process.
     job_max_concurrency: int = 5
+    # Jobs kept by the in-memory fallback (Redis unavailable) before the oldest
+    # finished ones are evicted. Each can hold up to job_max_result_size.
+    job_memory_max_jobs: int = 200
 
     # Storage
     upload_dir: str = "./data/uploads"
     max_upload_size: int = 100 * 1024 * 1024  # 100MB
+
+    # Text-extraction limits on untrusted uploads. A zip-based Office file is
+    # small on the wire and arbitrarily large once inflated; a PDF can declare
+    # any number of pages. Past a page/OCR cap the document is still indexed,
+    # with a warning recorded on it saying what was not read.
+    extraction_max_uncompressed_bytes: int = 500 * 1024 * 1024
+    extraction_max_zip_members: int = 10_000
+    extraction_max_pdf_pages: int = 5_000
+    extraction_max_ocr_pages: int = 300
+
+    # Case-law reading bounds. Opinions and filings are read in windows; these
+    # cap the windows per item. Whatever a cap leaves unread is reported in the
+    # result (partially_read / coverage), never silently skipped.
+    research_max_windows_per_opinion: int = 6  # x 80k chars
+    authority_map_max_document_windows: int = 8  # x 60k chars
+    authority_map_max_opinion_windows: int = 4  # x 60k chars
 
     # Data-at-rest acknowledgement. Uploaded originals are app-encrypted
     # (AES-256-GCM), but DERIVED privileged text — vector chunks in the Chroma
@@ -458,9 +543,14 @@ class Settings(BaseSettings):
     # confirm it here. Set DISK_ENCRYPTION_ACKNOWLEDGED=true after enabling FDE.
     disk_encryption_acknowledged: bool = False
 
-    # HIPAA Enforcement (dormant unless explicitly enabled)
+    # AI provider allowlist (dormant unless explicitly enabled). The env name is
+    # historical: this is an allowlist, not a HIPAA compliance feature. When on,
+    # every chat/utility LLM call and every embedding call made through the RAG
+    # pipeline is refused unless its provider is listed (see
+    # app/services/provider_policy.py for provider names, e.g. "openai",
+    # "anthropic", "google", "voyage", "cohere", "self_hosted").
     hipaa_enforcement_enabled: bool = False
-    approved_ai_providers: list[str] = []  # e.g., ["openai", "anthropic"]
+    approved_ai_providers: list[str] = []  # e.g., ["anthropic", "self_hosted"]
 
     # Dedicated HMAC key for audit chain hashing (separate from secret_key)
     audit_hmac_key: str = ""
@@ -471,6 +561,11 @@ class Settings(BaseSettings):
     # Halt startup if audit chain integrity is broken (tamper detection)
     audit_halt_on_tampering: bool = True
 
+    # When an audit entry cannot be written to its JSONL file, fail the request
+    # that produced it instead of continuing. Off by default: the event is
+    # still logged at CRITICAL and mirrored to the database.
+    audit_fail_closed: bool = False
+
     # Audit-log retention: JSONL files older than this are gzip-compressed; files
     # older than 2x this are deleted. A daily background task applies this.
     audit_retention_days: int = 90
@@ -479,6 +574,12 @@ class Settings(BaseSettings):
         env_file=["../.env", ".env"],  # Check parent directory first, then current
         env_file_encoding="utf-8",
         frozen=True,
+        # The same .env is read by docker compose and by middleware/database code
+        # via os.environ (DOMAIN, POSTGRES_PASSWORD, CORS_ORIGINS, ALLOWED_HOSTS,
+        # TRUSTED_PROXIES, DB_SSL, ...). Those are not Settings fields, and the
+        # pydantic-settings default (forbid) turns them into a startup crash for
+        # any non-Docker run (uvicorn, alembic) that loads the file directly.
+        extra="ignore",
     )
 
 

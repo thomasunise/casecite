@@ -11,7 +11,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -23,6 +23,7 @@ from app.services.authority_mapper import authority_mapper_service
 from app.services.job_queue import job_manager
 from app.services.permissions import require_permission
 from app.services.user_keys import UserAPIKeys
+from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,12 @@ router = APIRouter(prefix="/authority-map", tags=["authority-map"])
 
 
 class AuthorityMapRequest(BaseModel):
-    document_text: str = Field(..., description="Full text of the document to map")
-    document_name: str | None = None
-    document_id: str | None = None
-    jurisdiction: str | None = None
+    document_text: str = Field(
+        ..., description="Full text of the document to map", max_length=2_000_000
+    )
+    document_name: str | None = Field(None, max_length=500)
+    document_id: str | None = Field(None, max_length=64)
+    jurisdiction: str | None = Field(None, max_length=100)
 
 
 @router.post("/analyze")
@@ -65,6 +68,7 @@ async def analyze_authority_map(
         event_type=AuditEventType.DATA_ACCESS,
         user_id=user_id,
         user_email=current_user.email,
+        ip_address=get_client_ip(http_request),
         details={"action": "authority_map_submit", "job_id": job_id},
     )
     return {"job_id": job_id}
@@ -73,6 +77,7 @@ async def analyze_authority_map(
 @router.get("/{run_id}")
 async def get_authority_map(
     run_id: str,
+    http_request: Request,
     current_user: TokenData = require_permission("authority_map.use"),
     db: AsyncSession = Depends(get_db),
     accessible_matters: set[str] = Depends(accessible_matter_ids),
@@ -89,6 +94,16 @@ async def get_authority_map(
     )
     if not run or not (owner_ok or member_ok):
         raise HTTPException(status_code=404, detail="Authority map not found")
+
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_ACCESS,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="authority_map",
+        resource_id=run_id,
+        ip_address=get_client_ip(http_request),
+        details={"action": "authority_map_view"},
+    )
 
     rows = (
         (await db.execute(select(AuthorityMapping).where(AuthorityMapping.run_id == run_id)))
@@ -123,3 +138,39 @@ async def get_authority_map(
             for m in rows
         ],
     }
+
+
+@router.delete("/{run_id}")
+async def delete_authority_map(
+    run_id: str,
+    http_request: Request,
+    current_user: TokenData = require_permission("authority_map.use"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete an authority-mapping run and its mappings. Owner only.
+
+    The stored mappings carry verbatim quotes from the mapped document, so the
+    owner must be able to remove them. Uniform 404 for runs the caller does not
+    own (no existence leak).
+    """
+    run = (
+        await db.execute(select(AuthorityMapRun).where(AuthorityMapRun.id == run_id))
+    ).scalar_one_or_none()
+    if not run or not run.user_id or run.user_id != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Authority map not found")
+
+    # No FK cascade from mappings to their run — delete the children explicitly.
+    await db.execute(delete(AuthorityMapping).where(AuthorityMapping.run_id == run_id))
+    await db.delete(run)
+    await db.commit()
+
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_DELETION,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="authority_map",
+        resource_id=run_id,
+        ip_address=get_client_ip(http_request),
+        details={"action": "authority_map_deleted"},
+    )
+    return {"status": "deleted", "id": run_id}

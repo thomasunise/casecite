@@ -14,9 +14,13 @@ export interface Citation {
   id: string;
   source: string;
   type: string;
-  confidence: number;
+  /** Measured score as a percent (0-100); undefined when the server gave none. */
+  confidence?: number;
   status: 'pending' | 'approved' | 'rejected';
-  similarity: number;
+  /** Measured retrieval similarity (0-1); undefined when the server gave none. */
+  similarity?: number;
+  /** Retrieved, but scored below the user's similarity threshold. */
+  weakMatch?: boolean;
   relevanceRank: number;
   chunkIndex: number;
   tokenCount: number;
@@ -71,10 +75,3 @@ export interface ChatMessage {
   authorityMap?: import('../api/types').AuthorityMapChatResult;
 }
 
-export interface SessionStats {
-  queries: number;
-  citations: number;
-  approved: number;
-  rejected: number;
-  pending: number;
-}

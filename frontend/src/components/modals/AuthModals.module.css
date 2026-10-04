@@ -241,3 +241,24 @@
   from { transform: scale(0.95); opacity: 0; }
   to { transform: scale(1); opacity: 1; }
 }
+
+/* "Initial setup" disclosure on the signup form */
+
+.setupDisclosure {
+  font-size: 13px;
+  color: var(--gray-600);
+}
+
+.setupDisclosure summary {
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+/* Password policy hint under a new-password field */
+
+.policyHint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--gray-500);
+}

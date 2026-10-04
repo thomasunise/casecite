@@ -15,31 +15,52 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
-from jwt.exceptions import PyJWTError as JWTError
-from sqlalchemy.exc import DBAPIError, OperationalError
+from fastapi.security import HTTPAuthorizationCredentials
+from sqlalchemy.exc import SQLAlchemyError
 
+from app import __version__
 from app.config import settings
 from app.models.responses.system import (
     HealthResponse,
     MetricsResponse,
     ReadyResponse,
 )
-from app.redis_utils import RedisError
+from app.services.auth import TokenData, UserRole, get_current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["System"])
 
-# Build/process fingerprint. version = git sha baked into the image at build
+# Build/process fingerprint. BUILD_SHA = git sha baked into the image at build
 # (Coolify passes SOURCE_COMMIT); started_at = when THIS process booted.
-# Together they make "which build/container answered me?" checkable from a
+# started_at is public so "which container answered me?" is checkable from a
 # browser: refresh /health — a changing started_at means multiple containers
-# are serving one URL, which the embedded vector store cannot support.
-APP_VERSION = os.environ.get("SOURCE_COMMIT", os.environ.get("GIT_SHA", "unknown"))[:12]
+# are serving one URL, which the embedded vector store cannot support. The
+# release version and build sha are shown to admins only (no reconnaissance).
+BUILD_SHA = os.environ.get("SOURCE_COMMIT", os.environ.get("GIT_SHA", "unknown"))[:12]
 PROCESS_STARTED_AT = datetime.now(UTC).isoformat()
 
 # Bound for blocking probes moved off the event loop via asyncio.to_thread.
 _PROBE_TIMEOUT_SECONDS = 5.0
+
+
+async def _authenticate(request: Request) -> TokenData:
+    """Authenticate the caller exactly as every other endpoint does.
+
+    Delegates to ``get_current_user`` (Bearer header, else the httpOnly cookie)
+    so the token-type, tombstone, is_active, password-change and session checks
+    all apply — these endpoints must not be a weaker door than the rest of the
+    API. Raises HTTPException(401) when the caller is not authenticated.
+    """
+    credentials = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header[:7].lower() == "bearer ":
+        credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=auth_header[7:])
+    return await get_current_user(request, credentials)
+
+
+def _is_admin(token_data: TokenData) -> bool:
+    return UserRole.ADMIN.value in (token_data.roles or [])
 
 
 def _redis_ping() -> None:
@@ -71,7 +92,7 @@ async def root() -> dict | FileResponse:
         return FileResponse(_index)
     return {
         "name": settings.app_name,
-        "version": "1.0.0",
+        "version": __version__,
         "status": "running",
         "docs": "/docs" if settings.debug else "disabled",
     }
@@ -84,19 +105,19 @@ async def health_check(request: Request) -> dict:
 
     Used by load balancers and monitoring.
 
-    In production mode the public response is minimal (status + timestamp only).
-    Detailed component information is returned only when the caller provides a
-    valid admin Bearer token, preventing reconnaissance by unauthenticated
-    parties.  In debug mode full details are always returned for
-    convenience.
+    In production mode the public response is minimal (status, timestamp and
+    process start time). The release version, build and component breakdown are
+    returned only to an authenticated admin (Bearer token or session cookie),
+    preventing reconnaissance by unauthenticated parties. In debug mode full
+    details are always returned for convenience.
     """
-    from datetime import datetime
-
     from app.services.vectordb import get_vector_db
 
     overall_healthy = True
 
     # --- Run component checks (always, for status determination) ---
+    # A probe must never 500: any failure, whatever the driver raises, means
+    # "this component is down" — hence the deliberately broad excepts below.
 
     # Vector DB
     vector_db_ok = True
@@ -106,8 +127,10 @@ async def health_check(request: Request) -> dict:
             vector_db_ok = False
         else:
             await db.get_stats()
-    except (ValueError, OSError, RuntimeError):
+    except Exception as e:
+        logger.debug("Health check: vector database unavailable: %s", e)
         vector_db_ok = False
+    if not vector_db_ok:
         overall_healthy = False
 
     # Database
@@ -122,7 +145,7 @@ async def health_check(request: Request) -> dict:
                 await conn.execute(text("SELECT 1"))
 
         await asyncio.wait_for(_db_probe(), timeout=_PROBE_TIMEOUT_SECONDS)
-    except (OperationalError, DBAPIError, OSError) as e:
+    except Exception as e:
         logger.debug("Health check: database unreachable: %s", e)
         db_ok = False
         overall_healthy = False
@@ -134,13 +157,15 @@ async def health_check(request: Request) -> dict:
         try:
             # Sync client — run off the event loop with a hard bound.
             await asyncio.wait_for(asyncio.to_thread(_redis_ping), timeout=_PROBE_TIMEOUT_SECONDS)
-        except (ValueError, OSError, RuntimeError):  # TimeoutError is an OSError
+        except Exception as e:
+            logger.debug("Health check: redis unreachable: %s", e)
             redis_ok = False
+            overall_healthy = False
 
-    # LLM
-    llm_configured = bool(settings.openai_api_key or settings.anthropic_api_key)
-    if not llm_configured:
-        overall_healthy = False
+    # LLM — informational only. A server-level key is optional: this is a BYOK
+    # product (see Settings validation in app/config.py), so a missing server
+    # key is a valid configuration and must not report the instance unhealthy.
+    llm_server_key = bool(settings.openai_api_key or settings.anthropic_api_key)
 
     status = "healthy" if overall_healthy else "degraded"
 
@@ -148,36 +173,31 @@ async def health_check(request: Request) -> dict:
     is_admin = False
     if settings.debug:
         is_admin = True  # Always show details in local development
-    else:
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            try:
-                from app.services.auth import auth_service
-
-                token_data = auth_service.verify_token(auth_header[7:])
-                from app.utils.rbac import has_role as _has_role
-
-                if _has_role("admin", token_data.roles):
-                    is_admin = True
-            except (JWTError, ValueError, KeyError, AttributeError):  # nosec B110 - auth failure just hides details
-                pass
+    elif request.headers.get("authorization") or request.cookies.get("access_token"):
+        try:
+            is_admin = _is_admin(await _authenticate(request))
+        # A probe carrying a stale token (401) — or arriving while the database
+        # the auth check needs is down — must still get its 200, minus details.
+        except (HTTPException, SQLAlchemyError, OSError, ValueError, KeyError, AttributeError):
+            is_admin = False
 
     # --- Build response ---
     response: dict = {
         "status": status,
         "timestamp": datetime.now(UTC).isoformat(),
-        "version": APP_VERSION,
         "started_at": PROCESS_STARTED_AT,
     }
 
     if is_admin:
-        # Detailed component breakdown (admin / dev only)
+        # Version, build and component breakdown (admin / dev only)
+        response["version"] = __version__
+        response["build"] = BUILD_SHA
         response["environment"] = "production" if not settings.debug else "development"
         response["components"] = {
             "vector_db": {"healthy": vector_db_ok},
             "database": {"healthy": db_ok},
             "redis": {"healthy": redis_ok, "configured": redis_configured},
-            "llm": {"configured": llm_configured},
+            "llm": {"configured": llm_server_key, "byok": True},
         }
 
     return response
@@ -202,9 +222,8 @@ async def readiness_check() -> dict | JSONResponse:
             logger.warning("Readiness check — %s: %s", label, err)
         return f"{label}: {err}" if (expose_detail and err is not None) else label
 
-    # Check LLM provider
-    if not settings.openai_api_key and not settings.anthropic_api_key:
-        issues.append(_issue("No LLM provider configured (OPENAI_API_KEY or ANTHROPIC_API_KEY)"))
+    # No LLM-provider check: a server-level key is optional (BYOK — users supply
+    # their own keys), so its absence must not take the instance out of rotation.
 
     # Check database connectivity
     try:
@@ -217,7 +236,9 @@ async def readiness_check() -> dict | JSONResponse:
                 await conn.execute(text("SELECT 1"))
 
         await asyncio.wait_for(_db_probe(), timeout=_PROBE_TIMEOUT_SECONDS)
-    except (OperationalError, DBAPIError, OSError) as e:
+    # Broad on purpose (here and below): whatever a driver raises, the probe
+    # reports "not ready" instead of 500-ing.
+    except Exception as e:
         issues.append(_issue("Database connection failed", e))
 
     # Check vector database
@@ -229,7 +250,7 @@ async def readiness_check() -> dict | JSONResponse:
             await db.get_stats()
         else:
             issues.append(_issue("Vector database not initialized"))
-    except (ValueError, OSError, RuntimeError) as e:
+    except Exception as e:
         issues.append(_issue("Vector database failed", e))
 
     # Check Redis connectivity (required in production)
@@ -237,7 +258,7 @@ async def readiness_check() -> dict | JSONResponse:
         try:
             # Sync client — run off the event loop with a hard bound.
             await asyncio.wait_for(asyncio.to_thread(_redis_ping), timeout=_PROBE_TIMEOUT_SECONDS)
-        except (RedisError, ImportError, ValueError, ConnectionError, OSError, RuntimeError) as e:
+        except Exception as e:
             issues.append(_issue("Redis connection failed", e))
 
     if issues:
@@ -255,26 +276,18 @@ async def metrics(request: Request) -> dict:
     Prometheus-compatible metrics endpoint.
 
     Returns key application metrics for monitoring and alerting.
-    Requires authentication in production mode.
+    Requires an authenticated admin in production mode.
     """
-    # Require auth in production
+    # Require an authenticated admin in production — same validation as every
+    # other endpoint (Bearer token or session cookie; see _authenticate).
     if not settings.debug:
-        from app.services.auth import auth_service
-
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
-            raise HTTPException(status_code=401, detail="Authentication required")
         try:
-            token_data = auth_service.verify_token(auth_header[7:])
-            from app.utils.rbac import has_role
-
-            if not has_role("admin", token_data.roles):
-                raise HTTPException(status_code=403, detail="Admin access required")
-        except HTTPException:
-            raise
-        except (JWTError, ValueError, KeyError):
-            raise HTTPException(status_code=401, detail="Invalid token")
-    from datetime import datetime
+            token_data = await _authenticate(request)
+        except (SQLAlchemyError, OSError) as e:
+            logger.warning("Metrics auth check failed — database unavailable: %s", e)
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable")
+        if not _is_admin(token_data):
+            raise HTTPException(status_code=403, detail="Admin access required")
 
     from app.services.documents import document_service
     from app.services.vectordb import get_vector_db
@@ -283,7 +296,8 @@ async def metrics(request: Request) -> dict:
         "timestamp": datetime.now(UTC).isoformat(),
         "application": {
             "name": settings.app_name,
-            "version": "1.0.0",
+            "version": __version__,
+            "build": BUILD_SHA,
             "environment": "production" if not settings.debug else "development",
         },
         "documents": {
@@ -310,7 +324,7 @@ async def metrics(request: Request) -> dict:
             }
         else:
             metrics_data["vector_db"] = {"healthy": False, "error": "not initialized"}
-    except (ValueError, KeyError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
+    except Exception as e:
         metrics_data["vector_db"] = {"healthy": False, "error": str(e)}
 
     # Database stats
@@ -335,7 +349,8 @@ async def metrics(request: Request) -> dict:
                 "connected": True,
                 "used_memory_mb": round(info.get("used_memory", 0) / 1024 / 1024, 2),
             }
-        except (RedisError, ImportError, ConnectionError, OSError):
+        except Exception as e:
+            logger.debug("Metrics: redis unreachable: %s", e)
             metrics_data["redis"] = {"connected": False}
 
     return metrics_data

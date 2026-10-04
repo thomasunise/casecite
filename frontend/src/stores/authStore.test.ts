@@ -7,6 +7,9 @@ vi.mock('../api', () => ({
     logout: vi.fn().mockResolvedValue(undefined),
     register: vi.fn(),
     forgotPassword: vi.fn(),
+    changePassword: vi.fn(),
+    logoutAllSessions: vi.fn(),
+    getCurrentUser: vi.fn(),
   },
   API_BASE_URL: 'http://localhost:8000/api/v1',
 }));
@@ -117,5 +120,66 @@ describe('authStore', () => {
     useDraftingStore.getState().setTargetPages(5);
     expect(useDraftingStore.getState().targetPages).toBe(5);
     expect(useUIStore.getState().toasts.some(t => t.message === 'Signed out')).toBe(true);
+  });
+
+  it('logout removes the locally cached settings under both the current and the old key', async () => {
+    localStorage.setItem('casecite_rag_settings', JSON.stringify({ contract_playbook: 'secret' }));
+    localStorage.setItem('wl_rag_settings', JSON.stringify({ contract_playbook: 'older secret' }));
+    useAuthStore.setState({ user, isAuthenticated: true });
+
+    await useAuthStore.getState().handleLogout();
+
+    expect(localStorage.getItem('casecite_rag_settings')).toBeNull();
+    expect(localStorage.getItem('wl_rag_settings')).toBeNull();
+  });
+
+  it('keeps the must-change-password flag from the login response on the user', async () => {
+    (api.login as ReturnType<typeof vi.fn>).mockResolvedValue({
+      access_token: 't', user: { ...user, must_change_password: true },
+    });
+    useAuthStore.setState({ loginEmail: 'a@b.c', loginPassword: 'Temp-Password-1!' });
+
+    await useAuthStore.getState().handleLoginSubmit();
+
+    expect(useAuthStore.getState().user?.must_change_password).toBe(true);
+  });
+
+  it('handleChangePassword rejects a reused password without calling the server', async () => {
+    useAuthStore.setState({ user, isAuthenticated: true });
+    const ok = await useAuthStore.getState().handleChangePassword('Same-Password-1!', 'Same-Password-1!', 'Same-Password-1!');
+    expect(ok).toBe(false);
+    expect(api.changePassword).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().changePasswordError).toMatch(/different/);
+  });
+
+  it('handleLogoutEverywhere revokes all sessions, then clears this device', async () => {
+    (api.logoutAllSessions as ReturnType<typeof vi.fn>).mockResolvedValue({ status: 'all_sessions_terminated' });
+    useAuthStore.setState({ user, isAuthenticated: true });
+    useDraftingStore.setState({ messages: [{ id: 'm1', role: 'user', text: 'Draft me an NDA' }] });
+
+    await useAuthStore.getState().handleLogoutEverywhere();
+
+    expect(api.logoutAllSessions).toHaveBeenCalledTimes(1);
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(useDraftingStore.getState().messages).toEqual([]);
+  });
+
+  it('handleLogoutEverywhere stays signed in when the server call fails', async () => {
+    (api.logoutAllSessions as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Server unavailable'));
+    useAuthStore.setState({ user, isAuthenticated: true });
+
+    await useAuthStore.getState().handleLogoutEverywhere();
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useUIStore.getState().toasts.some(t => t.message === 'Server unavailable')).toBe(true);
+  });
+
+  it('refreshUser picks up cleared flags (e.g. after enrolling in MFA)', async () => {
+    (api.getCurrentUser as ReturnType<typeof vi.fn>).mockResolvedValue({ ...user, mfa_enrollment_required: false });
+    useAuthStore.setState({ user: { ...user, mfa_enrollment_required: true }, isAuthenticated: true });
+
+    await useAuthStore.getState().refreshUser();
+
+    expect(useAuthStore.getState().user?.mfa_enrollment_required).toBe(false);
   });
 });

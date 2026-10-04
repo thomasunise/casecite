@@ -839,6 +839,155 @@
   border-radius: 8px;
 }
 
+/* One user: the identity row, its action buttons, and (when open) the delete panel */
+.userCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.userActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-left: 12px;
+}
+
+.userActions button,
+.dangerPanel button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.userActions button:disabled,
+.dangerPanel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inactiveBadge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--amber-800);
+  background: var(--amber-100);
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+
+.btnDangerXSmall {
+  padding: 4px 10px;
+  background: white;
+  color: var(--red-700);
+  border: 1px solid var(--red-500);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dangerPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--red-500);
+  border-radius: 8px;
+  background: var(--red-50);
+}
+
+.dangerTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--red-700);
+}
+
+.dangerText {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gray-800);
+}
+
+/* ── Audit Log tab ── */
+.auditFilters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.auditFilters .inviteField {
+  min-width: 150px;
+}
+
+.auditResult {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.auditResultOk {
+  background: var(--green-50);
+  border: 1px solid var(--green-500);
+  color: var(--green-700);
+}
+
+.auditResultBad {
+  background: var(--red-50);
+  border: 1px solid var(--red-500);
+  color: var(--red-700);
+}
+
+.auditTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.auditTable th {
+  text-align: left;
+  padding: 6px 8px;
+  font-weight: 600;
+  color: var(--gray-600);
+  border-bottom: 1px solid var(--gray-300);
+  white-space: nowrap;
+}
+
+.auditTable td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--gray-200);
+  color: var(--gray-800);
+  vertical-align: top;
+  word-break: break-word;
+}
+
+.auditFailed {
+  color: var(--red-700);
+  font-weight: 600;
+}
+
+/* ── Stored API keys (API Keys tab) and sessions (Security tab) ── */
+.storedKeyRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--gray-800);
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.storedKeyRow:last-child {
+  border-bottom: none;
+}
+
 .userRoleSelect {
   width: 150px;
   flex-shrink: 0;

@@ -10,7 +10,9 @@ Provides:
 
 import json
 import logging
+import re
 import time
+import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -25,6 +27,16 @@ from app.redis_utils import RedisError, _is_production, get_redis, require_redis
 from app.services.audit import AuditEventType, audit_service
 
 logger = logging.getLogger(__name__)
+
+# A path segment that is an identifier rather than a route name: all digits, a
+# UUID, or a long hex/opaque token. Collapsed to "{id}" for rate-limit buckets
+# so /documents/<id-1> and /documents/<id-2> draw on ONE quota.
+_ID_SEGMENT = re.compile(r"^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F-]{27}|(?=[^/]*\d)[A-Za-z0-9_-]{16,})$")
+
+
+def rate_limit_bucket(path: str) -> str:
+    """Normalize a request path to its rate-limit bucket (identifiers collapsed)."""
+    return "/".join("{id}" if _ID_SEGMENT.match(seg) else seg for seg in path.split("/"))
 
 
 class RateLimiter:
@@ -56,25 +68,21 @@ class RateLimiter:
             "/api/v1/auth/change-password": (5, 300),  # 5 per 5 min
             "/api/v1/auth/refresh": (10, 60),  # 10 per min (token minting)
             "/api/v1/auth/forgot-password": (3, 300),  # 3 per 5 min
-            "/api/v1/auth/mfa/verify": (5, 300),  # 5 per 5 min (brute-force protection)
-            "/api/v1/auth/mfa/recovery": (5, 300),  # 5 per 5 min (brute-force protection)
+            "/api/v1/auth/reset-password": (5, 300),  # 5 per 5 min
+            "/api/v1/auth/verify-reset-token": (10, 300),  # 10 per 5 min
+            # Second-factor endpoints — brute-force protection (the per-account
+            # lockout in routers/mfa.py is the primary brake; this is per-IP).
+            "/api/v1/auth/mfa/verify": (5, 300),  # 5 per 5 min
+            "/api/v1/auth/mfa/enable": (5, 300),  # 5 per 5 min
+            "/api/v1/auth/mfa/disable": (5, 300),  # 5 per 5 min
             "/api/v1/auth/mfa/recovery-codes": (5, 300),  # 5 per 5 min (code-proof gated)
-            # Expensive AI operations — stricter limits to prevent cost abuse
-            "/api/v1/discovery/suggest-objections": (10, 60),  # 10 per min
-            "/api/v1/discovery/detect-privilege": (10, 60),  # 10 per min
-            "/api/v1/discovery/esi-protocol": (5, 60),  # 5 per min
-            "/api/v1/legal-docs/draft": (5, 60),  # 5 per min
-            "/api/v1/legal-docs/compare": (10, 60),  # 10 per min
-            "/api/v1/pleadings/validate-rules": (10, 60),  # 10 per min
-            "/api/v1/pleadings/generate-toc": (10, 60),  # 10 per min
-            "/api/v1/legal-research/cases/compare": (10, 60),  # 10 per min
+            # Expensive AI / extraction operations — stricter limits to prevent cost abuse
+            "/api/v1/legal-docs": (20, 60),  # 20 per min (text extraction, PDF render)
             "/api/v1/strategy/brief": (5, 60),  # 5 per min
             # Job polling
             "/api/v1/jobs": (30, 60),  # 30 per min (polling)
             # Key management — prevent brute-force key enumeration
             "/api/v1/user/keys/save": (5, 60),  # 5 per min
-            "/api/v1/user/keys/delete": (10, 60),  # 10 per min
-            "/api/v1/auth/reset-password": (5, 300),  # 5 per 5 min
         }
 
         # Track failures for progressive delays
@@ -87,14 +95,21 @@ class RateLimiter:
         self._account_lockout_duration = 900  # 15 minutes
 
     def _get_limit(self, path: str) -> tuple:
-        """Get rate limit for a path (exact match or path prefix with /)."""
-        for pattern, limit in self.limits.items():
+        """Get rate limit for a path (exact match or path prefix with /).
+
+        The most specific (longest) matching rule wins, independent of the
+        order the rules are declared in.
+        """
+        best: str | None = None
+        for pattern in self.limits:
             if pattern == "default":
                 continue
             # Exact match or proper path prefix (prevents /auth/login matching /auth/login-history)
-            if path == pattern or path.startswith(pattern + "/"):
-                return limit
-        return self.limits["default"]
+            if (path == pattern or path.startswith(pattern + "/")) and (
+                best is None or len(pattern) > len(best)
+            ):
+                best = pattern
+        return self.limits[best] if best else self.limits["default"]
 
     def _cleanup_stale_entries(self):
         """Periodically remove stale IPs/paths from in-memory storage to prevent unbounded growth."""
@@ -125,9 +140,16 @@ class RateLimiter:
             del self._requests[ip]
 
     def is_allowed(self, ip: str, path: str) -> tuple[bool, dict]:
-        """Check if request is allowed under rate limit."""
+        """Check if request is allowed under rate limit.
+
+        The counter is keyed by the path with identifier segments collapsed
+        (see rate_limit_bucket), not by the literal URL: otherwise every
+        document/job/session id would get a full quota of its own and the
+        limit would not bound enumeration across ids.
+        """
         self._cleanup_stale_entries()
         max_requests, window = self._get_limit(path)
+        path = rate_limit_bucket(path)
 
         # Use Redis if available (sliding window with sorted sets)
         redis_client = require_redis()
@@ -310,20 +332,6 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.rate_limiter = RateLimiter()
 
-        # Allowed origins for CORS
-        self.allowed_origins = {"*"}  # Configure in production
-
-        # Paths that don't require auth
-        self.public_paths = {
-            "/",
-            "/health",
-            "/docs",
-            "/openapi.json",
-            "/api/v1/auth/login",
-            "/api/v1/auth/demo/login",
-            "/api/v1/auth/azure/callback",
-        }
-
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         start_time = time.time()
 
@@ -360,11 +368,13 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as e:  # Intentional broad catch - error boundary
-            # Log unexpected errors
+            # Record that the request failed. Only the exception TYPE is kept:
+            # the message can carry SQL parameters or document text, which must
+            # not be copied into the long-retention audit trail.
             await audit_service.log_event(
                 event_type=AuditEventType.SUSPICIOUS_ACTIVITY,
                 ip_address=client_ip,
-                details={"error": str(e), "path": request.url.path},
+                details={"error_type": type(e).__name__, "path": request.url.path},
                 success=False,
             )
             raise
@@ -403,46 +413,30 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
 
-        # Content Security Policy
-        # Note: 'unsafe-inline' for styles is often needed for frameworks like React
-        # 'unsafe-eval' should be avoided - if needed, use nonce-based CSP
-        # Script sources are the ones the app actually loads: Google Sign-In
-        # (accounts.google.com), the Google Picker loader (apis.google.com), and
-        # the Dropbox Chooser (www.dropbox.com). No CDN (unpkg/jsdelivr) is used.
-        # frame-src allows the Google Picker iframe.
-        # Source lists cover the scripts/frames the app actually loads: Google
-        # Sign-In + Picker (accounts/apis.google.com), Dropbox Chooser
-        # (www.dropbox.com), and the Box Content Picker (script+CSS from
-        # cdn01.boxcdn.net, API calls to api.box.com). frame-src includes blob:
-        # for the in-app PDF viewer's blob: iframe.
-        if settings.debug:
-            # Local development: permissive (unsafe-inline) for the Vite dev server
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com https://www.dropbox.com https://cdn01.boxcdn.net; "
-                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com https://cdn01.boxcdn.net; "
-                "font-src 'self' https://fonts.gstatic.com; "
-                "img-src 'self' data: https:; "
-                "connect-src 'self' https://api.openai.com https://api.anthropic.com https://login.microsoftonline.com https://accounts.google.com https://apis.google.com https://www.googleapis.com https://api.box.com https://upload.box.com; "
-                "frame-src 'self' blob: https://accounts.google.com https://docs.google.com; "
-                "frame-ancestors 'none'; "
-                "base-uri 'self'; "
-                "form-action 'self'"
-            )
-        else:
-            # Production mode: strict CSP — no unsafe-inline for scripts
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'self'; "
-                "script-src 'self' https://accounts.google.com https://apis.google.com https://www.dropbox.com https://cdn01.boxcdn.net; "
-                "style-src 'self' https://fonts.googleapis.com https://accounts.google.com https://cdn01.boxcdn.net; "
-                "font-src 'self' https://fonts.gstatic.com; "
-                "img-src 'self' data: https:; "
-                "connect-src 'self' https://api.openai.com https://api.anthropic.com https://login.microsoftonline.com https://accounts.google.com https://apis.google.com https://www.googleapis.com https://api.box.com https://upload.box.com; "
-                "frame-src 'self' blob: https://accounts.google.com https://docs.google.com; "
-                "frame-ancestors 'none'; "
-                "base-uri 'self'; "
-                "form-action 'self'"
-            )
+        # Content Security Policy — the same policy the bundled proxies send
+        # (Caddyfile, nginx.unified.conf); keep the three in step.
+        # Sources are the ones the app actually loads: Google Sign-In + Picker
+        # (accounts/apis.google.com, fetched only when the Google picker opens),
+        # the Dropbox Chooser (www.dropbox.com), the Box Content Picker
+        # (cdn01.boxcdn.net, api/upload.box.com), and Microsoft sign-in + Graph
+        # for the OneDrive picker, whose launch is a form post to OneDrive or
+        # SharePoint (form-action). Fonts are bundled; no font CDN. The browser
+        # never calls an AI provider, so none is listed. Inline styles are
+        # allowed for React style attributes; inline scripts only in DEBUG (the
+        # Vite dev server). frame-src includes blob: for the PDF viewer.
+        script_inline = " 'unsafe-inline'" if settings.debug else ""
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            f"script-src 'self'{script_inline} https://accounts.google.com https://apis.google.com https://www.dropbox.com https://cdn01.boxcdn.net; "
+            "style-src 'self' 'unsafe-inline' https://accounts.google.com https://cdn01.boxcdn.net; "
+            "font-src 'self'; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://login.microsoftonline.com https://graph.microsoft.com https://accounts.google.com https://apis.google.com https://www.googleapis.com https://api.box.com https://upload.box.com; "
+            "frame-src 'self' blob: https://accounts.google.com https://docs.google.com; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self' https://onedrive.live.com https://*.sharepoint.com"
+        )
 
         # HSTS (production only — never in local development)
         # Enables strict HTTPS for 1 year, including subdomains
@@ -464,9 +458,17 @@ class SessionManager:
     """
     Secure session management.
 
-    - Session timeouts
-    - Concurrent session limits
-    - Session binding (IP, user agent)
+    A session is one sign-in. It is keyed by the JTI of its CURRENT access
+    token and carries a stable ``session_id`` that the refresh token is bound
+    to, so a token refresh continues the same session instead of starting a
+    new one.
+
+    - Absolute lifetime: a session ends ``session_timeout`` after sign-in, no
+      matter how often it is refreshed
+    - Idle timeout: a session with no authenticated request for
+      ``idle_timeout`` is ended
+    - Concurrent session limit (oldest sign-in is evicted)
+    - Optional session binding (IP)
     - File-based persistence to survive restarts without Redis
     """
 
@@ -474,7 +476,12 @@ class SessionManager:
         # {user_id: [session_info]}
         self._sessions: dict[str, list] = defaultdict(list)
         self.max_sessions_per_user = 5
-        self.session_timeout = timedelta(hours=8)
+        self.session_timeout = timedelta(hours=settings.session_absolute_timeout_hours)
+        self.idle_timeout = (
+            timedelta(minutes=settings.session_idle_timeout_minutes)
+            if settings.session_idle_timeout_minutes > 0
+            else None
+        )
         self._last_cleanup = datetime.now(UTC)
         self._cleanup_interval = timedelta(minutes=15)
 
@@ -503,16 +510,21 @@ class SessionManager:
                         expires_at = datetime.fromisoformat(entry["expires_at"])
                         if expires_at <= now:
                             continue
+                        created_at = datetime.fromisoformat(entry["created_at"])
                         self._sessions[entry["user_id"]].append(
                             {
                                 "jti": entry["jti"],
+                                "session_id": entry.get("session_id") or entry["jti"],
                                 "ip_address": entry.get("ip_address", "unknown"),
                                 "user_agent": entry.get("user_agent", ""),
-                                "created_at": datetime.fromisoformat(entry["created_at"]),
+                                "created_at": created_at,
                                 "expires_at": expires_at,
-                                "last_activity": datetime.fromisoformat(
-                                    entry.get("last_activity", entry["created_at"])
-                                ),
+                                # The file is only rewritten on session changes,
+                                # so its last_activity is stale by design. Time
+                                # the process was down is not user idleness:
+                                # restart the idle clock (the absolute lifetime
+                                # in expires_at is unaffected).
+                                "last_activity": now,
                             }
                         )
                         loaded += 1
@@ -523,29 +535,36 @@ class SessionManager:
         except OSError as e:
             logger.warning(f"Could not load sessions from file: {e}")
 
+    @staticmethod
+    def _file_entry(user_id: str, session: dict) -> dict:
+        return {
+            "user_id": user_id,
+            "jti": session["jti"],
+            "session_id": session.get("session_id") or session["jti"],
+            "ip_address": session["ip_address"],
+            "user_agent": session["user_agent"],
+            "created_at": session["created_at"].isoformat(),
+            "expires_at": session["expires_at"].isoformat(),
+            "last_activity": session["last_activity"].isoformat(),
+        }
+
+    def _restrict_session_file(self):
+        """Owner-only permissions (0o600) on the session file."""
+        try:
+            import os
+            import stat
+
+            os.chmod(self._session_file, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass  # Windows may not support chmod
+
     def _persist_session(self, user_id: str, session: dict):
         """Append a session to the persistence file."""
         try:
             self._session_file.parent.mkdir(parents=True, exist_ok=True)
-            entry = {
-                "user_id": user_id,
-                "jti": session["jti"],
-                "ip_address": session["ip_address"],
-                "user_agent": session["user_agent"],
-                "created_at": session["created_at"].isoformat(),
-                "expires_at": session["expires_at"].isoformat(),
-                "last_activity": session["last_activity"].isoformat(),
-            }
             with open(self._session_file, "a") as f:
-                f.write(json.dumps(entry) + "\n")
-            # Restrict file permissions to owner only (0o600)
-            try:
-                import os
-                import stat
-
-                os.chmod(self._session_file, stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass  # Windows may not support chmod
+                f.write(json.dumps(self._file_entry(user_id, session)) + "\n")
+            self._restrict_session_file()
         except OSError:
             pass  # Best-effort persistence
 
@@ -556,26 +575,17 @@ class SessionManager:
             with open(self._session_file, "w") as f:
                 for user_id, sessions in self._sessions.items():
                     for s in sessions:
-                        entry = {
-                            "user_id": user_id,
-                            "jti": s["jti"],
-                            "ip_address": s["ip_address"],
-                            "user_agent": s["user_agent"],
-                            "created_at": s["created_at"].isoformat(),
-                            "expires_at": s["expires_at"].isoformat(),
-                            "last_activity": s["last_activity"].isoformat(),
-                        }
-                        f.write(json.dumps(entry) + "\n")
-            # Restrict file permissions to owner only (0o600)
-            try:
-                import os
-                import stat
-
-                os.chmod(self._session_file, stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass  # Windows may not support chmod
+                        f.write(json.dumps(self._file_entry(user_id, s)) + "\n")
+            self._restrict_session_file()
         except OSError:
             pass
+
+    def _is_idle(self, session: dict, now: datetime) -> bool:
+        idle_timeout = getattr(self, "idle_timeout", None)
+        return idle_timeout is not None and now - session["last_activity"] > idle_timeout
+
+    def _is_live(self, session: dict, now: datetime) -> bool:
+        return session["expires_at"] > now and not self._is_idle(session, now)
 
     def _cleanup_expired_sessions(self):
         """Periodically remove all expired sessions to prevent unbounded memory growth."""
@@ -586,7 +596,7 @@ class SessionManager:
 
         stale_users = []
         for user_id, sessions in self._sessions.items():
-            self._sessions[user_id] = [s for s in sessions if s["expires_at"] > now]
+            self._sessions[user_id] = [s for s in sessions if self._is_live(s, now)]
             if not self._sessions[user_id]:
                 stale_users.append(user_id)
         for uid in stale_users:
@@ -595,23 +605,37 @@ class SessionManager:
         # Compact the session persistence file
         self._rewrite_session_file()
 
-    def create_session(self, user_id: str, ip_address: str, user_agent: str, jti: str) -> bool:
-        """Create a new session, enforcing limits."""
+    def create_session(
+        self,
+        user_id: str,
+        ip_address: str,
+        user_agent: str,
+        jti: str,
+        session_id: str | None = None,
+    ) -> bool:
+        """Create a new session (one per sign-in), enforcing limits.
+
+        ``session_id`` is the stable id the refresh token is bound to (``sid``
+        claim); it defaults to a fresh random id.
+        """
         self._cleanup_expired_sessions()
         now = datetime.now(UTC)
 
         # Clean expired sessions
-        self._sessions[user_id] = [s for s in self._sessions[user_id] if s["expires_at"] > now]
+        self._sessions[user_id] = [s for s in self._sessions[user_id] if self._is_live(s, now)]
 
         # Check session limit
-        if len(self._sessions[user_id]) >= self.max_sessions_per_user:
+        evicted = False
+        while len(self._sessions[user_id]) >= self.max_sessions_per_user:
             # Remove oldest session
             self._sessions[user_id].sort(key=lambda s: s["created_at"])
             self._sessions[user_id].pop(0)
+            evicted = True
 
         # Add new session
         session = {
             "jti": jti,
+            "session_id": session_id or uuid.uuid4().hex,
             "ip_address": ip_address,
             "user_agent": user_agent,
             "created_at": now,
@@ -619,9 +643,44 @@ class SessionManager:
             "last_activity": now,
         }
         self._sessions[user_id].append(session)
-        self._persist_session(user_id, session)
+        if evicted:
+            # The evicted sign-in must not come back from disk after a restart.
+            self._rewrite_session_file()
+        else:
+            self._persist_session(user_id, session)
 
         return True
+
+    def rotate_session(
+        self, user_id: str, session_id: str | None, new_jti: str, ip_address: str = None
+    ) -> str | None:
+        """Move a live session onto a freshly minted access token (token refresh).
+
+        Returns the JTI of the access token being replaced, or None when no live
+        session with ``session_id`` exists (signed out, evicted by the session
+        cap, idle too long, or past its absolute lifetime) — in which case the
+        refresh must be refused. The session keeps its original ``created_at``
+        and ``expires_at``: refreshing never extends the absolute lifetime.
+        """
+        if not session_id:
+            return None
+        now = datetime.now(UTC)
+        for session in self._sessions.get(user_id, []):
+            if session.get("session_id") != session_id:
+                continue
+            if not self._is_live(session, now):
+                self._sessions[user_id] = [s for s in self._sessions[user_id] if s is not session]
+                self._rewrite_session_file()
+                return None
+            if settings.enforce_session_ip_binding and ip_address:
+                if session["ip_address"] != ip_address:
+                    return None
+            old_jti = session["jti"]
+            session["jti"] = new_jti
+            session["last_activity"] = now
+            self._rewrite_session_file()
+            return old_jti
+        return None
 
     def validate_session(
         self, user_id: str, jti: str, ip_address: str = None, token_exp: datetime = None
@@ -635,8 +694,12 @@ class SessionManager:
 
         for session in self._sessions.get(user_id, []):
             if session["jti"] == jti:
-                # Check expiration
+                # Check absolute expiration
                 if session["expires_at"] < now:
+                    return False
+
+                # Check idle timeout
+                if self._is_idle(session, now):
                     return False
 
                 # Check IP binding if enabled
@@ -670,18 +733,19 @@ class SessionManager:
             {
                 "created_at": s["created_at"].isoformat(),
                 "last_activity": s["last_activity"].isoformat(),
+                "expires_at": s["expires_at"].isoformat(),
                 "ip_address": s["ip_address"][:20] + "..."
                 if len(s["ip_address"]) > 20
                 else s["ip_address"],
             }
             for s in self._sessions.get(user_id, [])
-            if s["expires_at"] > now
+            if self._is_live(s, now)
         ]
 
     def get_active_sessions_raw(self, user_id: str) -> list:
         """Get all active sessions with JTIs (internal use for token revocation)."""
         now = datetime.now(UTC)
-        return [s for s in self._sessions.get(user_id, []) if s["expires_at"] > now]
+        return [s for s in self._sessions.get(user_id, []) if self._is_live(s, now)]
 
 
 # Global instances

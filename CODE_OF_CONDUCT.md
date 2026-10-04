@@ -23,7 +23,7 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported by contacting the project team at the address specified in the `CONDUCT_EMAIL` environment variable (default: conduct@casecite.com). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported privately to the project maintainer, [@thomasunise](https://github.com/thomasunise), through GitHub (the "Report" option on the offending comment or profile reaches GitHub; to reach the maintainer directly, use the contact details on that profile). All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances. Reports are kept confidential.
 
 ## Attribution
 

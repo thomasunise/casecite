@@ -28,6 +28,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.config import settings
+from app.services.case_law_research import redact_unverified_case_references
 from app.services.llm_clients import chat_model, openai_chat, utility_model
 from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
 
@@ -566,9 +567,20 @@ async def generate_from_plan(
     await _report(progress, "Reconciling cross-references, numbering and defined terms…", 0.85)
     text, notes = await _reconcile(client, assembled, window, sections=drafted)
 
+    # Same rule as every other model-written text: a case the draft names must
+    # come from the user's instructions or their reference documents.
+    text, removed = redact_unverified_case_references(
+        text,
+        sources=[instructions, title, *(ref_text for _label, ref_text in references)],
+        known_parties=True,
+    )
+    if removed:
+        logger.info("Long drafting removed %d unverified case reference(s)", len(removed))
+
     return {
         "title": title,
         "text": text,
+        "case_law_removed": removed,
         "sections": drafted,
         "reconcile_notes": notes,
         "references_mode": mode,
@@ -787,7 +799,12 @@ async def revise_draft(
     sections = split_sections(draft_text) if len(draft_text) >= LONG_DRAFT_CHARS else []
     if not sections:
         result = await draft_document(client, instructions, revision_of=draft_text)
-        return {"text": result["text"], "title": result.get("title"), "revised_sections": "all"}
+        return {
+            "text": result["text"],
+            "title": result.get("title"),
+            "revised_sections": "all",
+            "case_law_removed": result.get("case_law_removed", []),
+        }
 
     await _report(progress, "Working out which sections the change touches…", 0.1)
     targets = await _target_sections(client, instructions, draft_text, sections)
@@ -799,9 +816,15 @@ async def revise_draft(
                 "pass — select the clause or section to change and ask again."
             )
         result = await draft_document(client, instructions, revision_of=draft_text)
-        return {"text": result["text"], "title": result.get("title"), "revised_sections": "all"}
+        return {
+            "text": result["text"],
+            "title": result.get("title"),
+            "revised_sections": "all",
+            "case_law_removed": result.get("case_law_removed", []),
+        }
 
     text = draft_text
+    removed: list[str] = []
     # Splice from the last section backwards so earlier spans stay valid.
     ordered = sorted((s for s in sections if s["number"] in targets), key=lambda s: -s["start"])
     total = len(ordered)
@@ -821,5 +844,15 @@ async def revise_draft(
         if not revised:
             raise RuntimeError(f"Revising section {s['number']} returned nothing")
         revised = _ensure_heading(revised, s)
+        # Only the rewritten section is model output; the existing draft and the
+        # instructions are the sources a case reference may come from.
+        revised, gone = redact_unverified_case_references(
+            revised, sources=[instructions, draft_text], known_parties=True
+        )
+        removed += gone
         text = text[: s["start"]] + revised.rstrip() + "\n\n" + text[s["end"] :].lstrip("\n")
-    return {"text": text, "revised_sections": [s["number"] for s in ordered][::-1]}
+    return {
+        "text": text,
+        "revised_sections": [s["number"] for s in ordered][::-1],
+        "case_law_removed": removed,
+    }

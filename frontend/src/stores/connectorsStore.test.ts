@@ -23,6 +23,7 @@ import { useConnectorsStore } from './connectorsStore';
 import { usePickerStore } from './pickerStore';
 import { useUIStore } from './uiStore';
 import { useDocumentsStore } from './documentsStore';
+import { useAuthStore } from './authStore';
 import { api } from '../api';
 
 describe('connectorsStore', () => {
@@ -45,7 +46,6 @@ describe('connectorsStore', () => {
     expect(state.showPickerModal).toBe(false);
     expect(state.pickerLoading).toBe(false);
     expect(state.activePickerProvider).toBeNull();
-    expect(state.showProvidersModal).toBe(false);
   });
 
   // ==================== Setters ====================
@@ -81,11 +81,6 @@ describe('connectorsStore', () => {
   it('setActivePickerProvider updates activePickerProvider', () => {
     useConnectorsStore.getState().setActivePickerProvider('google_drive');
     expect(useConnectorsStore.getState().activePickerProvider).toBe('google_drive');
-  });
-
-  it('setShowProvidersModal updates showProvidersModal', () => {
-    useConnectorsStore.getState().setShowProvidersModal(true);
-    expect(useConnectorsStore.getState().showProvidersModal).toBe(true);
   });
 
   // ==================== hasPickerSupport ====================
@@ -167,6 +162,94 @@ describe('connectorsStore', () => {
 
     expect(useConnectorsStore.getState().activePickerProvider).toBe('google_drive');
     expect(useConnectorsStore.getState().showPickerModal).toBe(true);
+  });
+
+  it('never starts a whole-account sync without a second, explicit confirmation', async () => {
+    (api.syncConnector as ReturnType<typeof vi.fn>).mockResolvedValue({ status: 'started' });
+    const connector = { id: 'clio', name: 'Clio', configured: true, connected: true } as any;
+
+    await useConnectorsStore.getState().handleConnectorClick(connector);
+    expect(useUIStore.getState().confirmModal.title).toBe('Manage Clio');
+
+    // "Sync Now" only opens the scope warning — nothing is sent yet.
+    useUIStore.getState().handleConfirm();
+    expect(api.syncConnector).not.toHaveBeenCalled();
+    const warning = useUIStore.getState().confirmModal;
+    expect(warning.open).toBe(true);
+    expect(warning.title).toBe('Import the entire Clio account?');
+    expect(warning.message).toMatch(/Every document/);
+    expect(warning.message).toMatch(/embedding provider/);
+    expect(warning.confirmText).toBe('Import entire account');
+
+    useUIStore.getState().handleConfirm();
+    await vi.waitFor(() => expect(api.syncConnector).toHaveBeenCalledWith('clio', { sync_all: true }));
+  });
+
+  it('cancelling the whole-account warning sends nothing', async () => {
+    const connector = { id: 'box', name: 'Box', configured: true, connected: true } as any;
+    await useConnectorsStore.getState().handleConnectorClick(connector);
+    useUIStore.getState().handleConfirm();
+    useUIStore.getState().closeConfirm();
+    expect(api.syncConnector).not.toHaveBeenCalled();
+  });
+
+  it('an admin-only connector is refused for a non-admin, and usable by an admin', async () => {
+    const connector = { id: 'filevine', name: 'Filevine', configured: true, connected: true, adminOnly: true } as any;
+
+    useAuthStore.setState({ user: { id: 'u1', email: 'a@firm.com', roles: ['attorney'] }, isAuthenticated: true });
+    await useConnectorsStore.getState().handleConnectorClick(connector);
+    expect(useUIStore.getState().confirmModal.open).toBe(false);
+    expect(useUIStore.getState().toasts.some(t => t.message.includes('only an administrator'))).toBe(true);
+
+    useAuthStore.setState({ user: { id: 'u2', email: 'admin@firm.com', roles: ['admin'] }, isAuthenticated: true });
+    await useConnectorsStore.getState().handleConnectorClick(connector);
+    expect(useUIStore.getState().confirmModal.title).toBe('Manage Filevine');
+  });
+
+  it('loadConnectors carries the admin_only flag', async () => {
+    (api.getConnectors as ReturnType<typeof vi.fn>).mockResolvedValue({
+      connectors: [{ id: 'filevine', connected: false, configured: true, admin_only: true }],
+    });
+    (api.getPickerConfig as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    await useConnectorsStore.getState().loadConnectors();
+    const filevine = useConnectorsStore.getState().connectors.find(c => c.id === 'filevine');
+    expect(filevine?.adminOnly).toBe(true);
+  });
+
+  it('refuses to open an OAuth address that only looks like a provider', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    (api.connectConnector as ReturnType<typeof vi.fn>).mockResolvedValue({
+      auth_url: 'https://app.clio.com.attacker.example/oauth',
+    });
+    const connector = { id: 'clio', name: 'Clio', configured: true, connected: false } as any;
+
+    await useConnectorsStore.getState().handleConnectorClick(connector);
+
+    expect(open).not.toHaveBeenCalled();
+    expect(useUIStore.getState().toasts.some(t => t.message.includes('unexpected sign-in address'))).toBe(true);
+    open.mockRestore();
+  });
+
+  it('checks the connection only after the OAuth popup has closed', async () => {
+    vi.useFakeTimers();
+    const popup = { closed: false } as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    (api.connectConnector as ReturnType<typeof vi.fn>).mockResolvedValue({ auth_url: 'https://app.clio.com/oauth/authorize' });
+    (api.getConnectorStatus as ReturnType<typeof vi.fn>).mockResolvedValue({ connected: true, docs_indexed: 3 });
+    const connector = { id: 'clio', name: 'Clio', configured: true, connected: false } as any;
+
+    const pending = useConnectorsStore.getState().handleConnectorClick(connector);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(api.getConnectorStatus).not.toHaveBeenCalled();
+
+    (popup as { closed: boolean }).closed = true;
+    await vi.advanceTimersByTimeAsync(1000);
+    await pending;
+
+    expect(api.getConnectorStatus).toHaveBeenCalledWith('clio');
+    expect(useConnectorsStore.getState().connectors.find(c => c.id === 'clio')?.connected).toBe(true);
+    open.mockRestore();
+    vi.useRealTimers();
   });
 
   // ==================== openActivePicker ====================

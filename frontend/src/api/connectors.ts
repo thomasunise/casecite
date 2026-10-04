@@ -14,10 +14,10 @@ Object.assign(api, {
     return api.request(`/connectors/${connectorId}/disconnect`, { method: 'POST' });
   },
 
-  async syncConnector(connectorId: string, options: Record<string, unknown> = {}): Promise<SyncStartResult> {
+  async syncConnector(connectorId: string, scope: { folder_id: string } | { sync_all: true }): Promise<SyncStartResult> {
     return api.request(`/connectors/${connectorId}/sync`, {
       method: 'POST',
-      body: JSON.stringify(options),
+      body: JSON.stringify(scope),
     });
   },
 

@@ -1,15 +1,22 @@
 """
-Advanced Search Module - Enterprise-Grade Search Capabilities
+Search helpers layered on top of vector retrieval.
 
-Provides:
-- Boolean query parsing (AND, OR, NOT, phrases)
-- Hybrid search (semantic + keyword BM25)
-- Field-specific search
-- Date range, court, and document type filters
-- Cross-encoder reranking
-- Query expansion
+What this module actually does:
+
+- Explicit operator parsing. ``AND`` / ``OR`` / ``NOT`` are operators only
+  when typed in UPPERCASE inside a mixed-case query, and ``-term`` excludes a
+  term. Ordinary English ("is not paid") is never treated as Boolean.
+- Keyword rescoring ("hybrid"). BM25 is computed over the candidates the
+  vector search already returned and blended with their similarity. There is
+  no separate keyword index: a passage outside the vector candidate pool
+  cannot be found by keyword alone.
+- Optional cross-encoder reranking, only when ``sentence-transformers`` is
+  installed (it is not part of the default install). Without it, results stay
+  in blended-score order — no reranking model runs.
+- Field filters (``court:``, ``type:``, ``after:`` ...) on result metadata.
 """
 
+import importlib.util
 import logging
 import math
 import re
@@ -47,6 +54,7 @@ class ParsedQuery:
     """Structured representation of a parsed search query."""
 
     original: str
+    semantic_text: str = ""
     tokens: list[QueryToken] = field(default_factory=list)
     phrases: list[str] = field(default_factory=list)
     required_terms: list[str] = field(default_factory=list)  # AND terms
@@ -62,30 +70,29 @@ class ParsedQuery:
     jurisdictions: list[str] = field(default_factory=list)
 
     def get_semantic_query(self) -> str:
-        """Get the query optimized for semantic search."""
-        parts = []
-        parts.extend(self.phrases)
-        parts.extend(self.required_terms)
-        parts.extend(self.optional_terms)
-        return " ".join(parts)
+        """Text to embed / keyword-score: the user's question as typed.
 
-    def get_keyword_query(self) -> str:
-        """Get the query for keyword/BM25 search."""
-        return self.original
+        Only explicit search syntax is removed — recognised ``field:value``
+        filters, uppercase AND/OR operators, and excluded (``NOT x`` / ``-x``)
+        terms. Stop words, negations in plain English, and unknown
+        ``word:value`` tokens are part of the question and stay in.
+        """
+        return self.semantic_text or self.original
 
 
 class QueryParser:
     """
-    Parses legal search queries with Boolean operators.
+    Parses explicit search syntax out of a query without mangling plain English.
 
     Supports:
-    - AND, OR, NOT operators
+    - Uppercase AND / OR / NOT operators (lowercase "and"/"or"/"not" are words)
+    - Exclusion prefix: -term
     - Quoted phrases: "willful infringement"
-    - Field-specific: case_name:Smith, court:9th
-    - Parentheses for grouping (future)
+    - Field filters for known fields: court:9th, type:contract, after:2020
     """
 
-    # Legal-specific stop words to ignore
+    # Words that carry no keyword signal. Used only to keep them out of the
+    # required/optional/excluded term lists — never to rewrite the query text.
     STOP_WORDS = {
         "the",
         "a",
@@ -146,6 +153,14 @@ class QueryParser:
         "filename": "filename",
     }
 
+    # Filter-only fields (no metadata mapping of their own).
+    FILTER_FIELDS = {"jurisdiction", "after", "from", "date_from", "before", "to", "date_to"}
+
+    _FIELD_PATTERN = re.compile(r'(?<![\w:/])(\w+):("[^"]+"|[^\s":/][^\s"]*)')
+
+    def _is_known_field(self, name: str) -> bool:
+        return name in self.FIELD_MAPPINGS or name in self.FILTER_FIELDS
+
     def parse(self, query: str) -> ParsedQuery:
         """Parse a search query into structured components."""
         result = ParsedQuery(original=query)
@@ -153,19 +168,14 @@ class QueryParser:
         if not query or not query.strip():
             return result
 
-        # Extract quoted phrases first
-        phrases = re.findall(r'"([^"]+)"', query)
-        result.phrases = phrases
-
-        # Remove phrases from query for further parsing
-        query_without_phrases = re.sub(r'"[^"]+"', " ", query)
-
-        # Extract field-specific queries (field:value)
-        field_pattern = r'(\w+):(\S+|"[^"]+")'
-        for match in re.finditer(field_pattern, query_without_phrases):
-            field_name, value = match.groups()
-            field_name = field_name.lower()
-            value = value.strip('"')
+        # Extract field filters (field:value) for KNOWN fields only. Anything
+        # else containing a colon ("10:30", "Re:Smith", "Section 3:Term") is
+        # ordinary text and is left exactly where it is.
+        def _take_field(match: re.Match) -> str:
+            field_name = match.group(1).lower()
+            if not self._is_known_field(field_name):
+                return match.group(0)
+            value = match.group(2).strip('"')
 
             if field_name in self.FIELD_MAPPINGS:
                 result.field_queries[self.FIELD_MAPPINGS[field_name]] = value
@@ -181,66 +191,108 @@ class QueryParser:
                 result.date_from = self._parse_date(value)
             elif field_name in ("before", "to", "date_to"):
                 result.date_to = self._parse_date(value)
+            return " "
 
-        # Remove field queries
-        query_without_fields = re.sub(field_pattern, " ", query_without_phrases)
+        query_without_fields = self._FIELD_PATTERN.sub(_take_field, query)
 
-        # Parse remaining tokens with Boolean operators
-        tokens = self._tokenize(query_without_fields)
+        # Quoted phrases are kept verbatim (without the quotes) in the text.
+        result.phrases = re.findall(r'"([^"]+)"', query_without_fields)
+        query_without_phrases = re.sub(r'"[^"]+"', " ", query_without_fields)
+
+        # Parse remaining tokens; each token carries its own operator/negation.
+        tokens = self._tokenize(query_without_phrases)
         result.tokens = tokens
 
-        # Categorize terms
-        current_operator = BooleanOperator.AND
         for token in tokens:
-            if token.value.upper() == "AND":
-                current_operator = BooleanOperator.AND
-            elif token.value.upper() == "OR":
-                current_operator = BooleanOperator.OR
-            elif token.value.upper() == "NOT":
-                current_operator = BooleanOperator.NOT
-            elif token.value.lower() not in self.STOP_WORDS:
-                if current_operator == BooleanOperator.NOT or token.negated:
-                    result.excluded_terms.append(token.value)
-                elif current_operator == BooleanOperator.OR:
-                    result.optional_terms.append(token.value)
-                else:
-                    result.required_terms.append(token.value)
+            if token.value.lower() in self.STOP_WORDS:
+                continue
+            if token.negated:
+                result.excluded_terms.append(token.value)
+            elif token.operator == BooleanOperator.OR:
+                result.optional_terms.append(token.value)
+            else:
+                result.required_terms.append(token.value)
 
+        result.semantic_text = self._semantic_text(query_without_fields)
         return result
 
+    @staticmethod
+    def _operators_enabled(query: str) -> bool:
+        """Uppercase operators only count in a mixed-case query.
+
+        An ALL-CAPS message ("WHAT IS NOT COVERED") is shouting, not Boolean.
+        """
+        return any(ch.islower() for ch in query)
+
+    @staticmethod
+    def _exclusion_term(word: str) -> str | None:
+        """The term of a ``-term`` exclusion, or None if ``word`` isn't one."""
+        if len(word) > 1 and word[0] == "-" and word[1].isalpha():
+            return word[1:]
+        return None
+
+    def _semantic_text(self, query: str) -> str:
+        """``query`` with explicit operators and excluded terms removed.
+
+        Everything else — word order, stop words, punctuation, quoted phrase
+        content — is preserved, so a plain-English question is returned
+        unchanged (modulo whitespace).
+        """
+        operators = self._operators_enabled(query)
+        kept: list[str] = []
+        skip_next = False
+        for word in query.replace('"', " ").split():
+            if skip_next:
+                skip_next = False
+                continue
+            if operators and word in ("AND", "OR"):
+                continue
+            if operators and word == "NOT":
+                skip_next = True
+                continue
+            if self._exclusion_term(word) is not None:
+                continue
+            kept.append(word)
+        return " ".join(kept)
+
     def _tokenize(self, query: str) -> list[QueryToken]:
-        """Tokenize query string."""
-        tokens = []
-        words = query.split()
+        """Tokenize query string.
+
+        Operators are recognised only as exact uppercase words (AND, OR, NOT)
+        in a mixed-case query; a leading "-" directly attached to a word
+        excludes it. Lowercase "and" / "or" / "not" are ordinary words.
+        """
+        tokens: list[QueryToken] = []
+        operators = self._operators_enabled(query)
         current_operator = BooleanOperator.AND
         negated = False
 
-        for word in words:
-            word = word.strip()
-            if not word:
-                continue
-
-            upper_word = word.upper()
-
-            # Check for operators
-            if upper_word == "AND":
+        for word in query.split():
+            if operators and word == "AND":
                 current_operator = BooleanOperator.AND
                 continue
-            elif upper_word == "OR":
+            if operators and word == "OR":
                 current_operator = BooleanOperator.OR
+                # "a OR b": the term before OR is optional too.
+                if tokens and not tokens[-1].negated:
+                    tokens[-1].operator = BooleanOperator.OR
                 continue
-            elif upper_word in ("NOT", "-"):
+            if operators and word == "NOT":
                 negated = True
                 continue
 
-            # Check for negation prefix
-            if word.startswith("-"):
-                word = word[1:]
+            excluded = self._exclusion_term(word)
+            if excluded is not None:
+                word = excluded
                 negated = True
 
-            # Create token
-            token = QueryToken(value=word, operator=current_operator, negated=negated)
-            tokens.append(token)
+            # Trailing sentence punctuation is not part of the term.
+            value = word.strip(".,;:!?()[]")
+            if not any(ch.isalnum() for ch in value):
+                negated = False
+                continue
+
+            tokens.append(QueryToken(value=value, operator=current_operator, negated=negated))
 
             # Reset negation
             negated = False
@@ -348,12 +400,25 @@ class BM25:
         return [w for w in text.split() if len(w) > 2]
 
 
+def cross_encoder_available() -> bool:
+    """True when the optional ``sentence-transformers`` package is installed.
+
+    It is deliberately not in requirements.txt (it pulls PyTorch), so on a
+    default install this is False and no reranking model exists.
+    """
+    try:
+        return importlib.util.find_spec("sentence_transformers") is not None
+    except (ImportError, ValueError):
+        return False
+
+
 class CrossEncoderReranker:
     """
-    Cross-encoder reranking for improved relevance.
+    Optional cross-encoder reranking.
 
-    Uses a more expensive model to rerank top candidates
-    from initial retrieval for better precision.
+    Only does anything when ``sentence-transformers`` is installed. Without it
+    ``rerank`` is a plain sort by the score already on the results (blended
+    hybrid score, else vector similarity) — no model, no extra precision.
     """
 
     def __init__(self):
@@ -373,18 +438,21 @@ class CrossEncoderReranker:
             self._model_loaded = True
             logger.info("Cross-encoder model loaded successfully")
         except ImportError:
-            logger.warning(
-                "sentence-transformers not installed. "
-                "Reranking will use similarity scores only. "
-                "Install with: pip install sentence-transformers"
+            logger.info(
+                "sentence-transformers is not installed: cross-encoder reranking is "
+                "unavailable and results keep their similarity/keyword order."
             )
             self._model_loaded = True  # Mark as loaded to avoid retrying
+
+    @staticmethod
+    def _score(result: dict[str, Any]) -> float:
+        return result.get("hybrid_score", result.get("similarity", 0)) or 0
 
     async def rerank(
         self, query: str, results: list[dict[str, Any]], top_k: int = None
     ) -> list[dict[str, Any]]:
         """
-        Rerank results using cross-encoder.
+        Rerank results with the cross-encoder when one is installed.
 
         Args:
             query: Search query
@@ -392,7 +460,8 @@ class CrossEncoderReranker:
             top_k: Number of results to return
 
         Returns:
-            Reranked results
+            Reranked results; without a model, the same results sorted by
+            their existing score.
         """
         if not results:
             return results
@@ -402,8 +471,8 @@ class CrossEncoderReranker:
         await self._load_model()
 
         if self._model is None:
-            # Fallback: use original similarity scores
-            return sorted(results, key=lambda x: x.get("similarity", 0), reverse=True)[:top_k]
+            # No model: keep the existing (blended or similarity) ordering.
+            return sorted(results, key=self._score, reverse=True)[:top_k]
 
         # Prepare query-document pairs
         pairs = [(query, r.get("text", "")) for r in results]
@@ -430,22 +499,19 @@ class CrossEncoderReranker:
 
 class HybridSearcher:
     """
-    Combines semantic search with BM25 keyword search.
+    Keyword rescoring of vector-search candidates.
 
-    Uses Reciprocal Rank Fusion (RRF) to merge results.
+    BM25 is computed over the candidates the vector search returned and
+    blended with their similarity as a weighted average
+    (``keyword_weight`` / ``1 - keyword_weight``). This reorders the candidate
+    pool; it does not search a keyword index, so it cannot surface a passage
+    the vector search did not return.
     """
 
     def __init__(self, keyword_weight: float = None):
         self.keyword_weight = keyword_weight or settings.keyword_weight
         self.semantic_weight = 1 - self.keyword_weight
-        self.bm25 = BM25()
         self.reranker = CrossEncoderReranker()
-        self._indexed = False
-
-    def index_documents(self, documents: list[dict[str, Any]]):
-        """Index documents for keyword search."""
-        self.bm25.index_documents(documents)
-        self._indexed = True
 
     async def search(
         self,
@@ -455,16 +521,17 @@ class HybridSearcher:
         rerank: bool = None,
     ) -> list[dict[str, Any]]:
         """
-        Perform hybrid search combining semantic and keyword results.
+        Rescore vector candidates with BM25 and return them in blended order.
 
         Args:
             query: Search query
             semantic_results: Results from semantic/vector search
             top_k: Number of results to return
-            rerank: Whether to apply cross-encoder reranking
+            rerank: Whether to apply cross-encoder reranking (only effective
+                when sentence-transformers is installed)
 
         Returns:
-            Merged and ranked results
+            The candidates, reordered by blended score
         """
         top_k = top_k or settings.top_k
         rerank = rerank if rerank is not None else settings.rerank_enabled
@@ -472,14 +539,10 @@ class HybridSearcher:
         if not semantic_results:
             return []
 
-        # Score the candidate set with a REQUEST-LOCAL BM25 index. The keyword
-        # half of hybrid search fuses BM25 rank over exactly the vector
-        # candidates, so the index must be built from `semantic_results` on
-        # every call. Building it locally (instead of mutating the shared
-        # HybridSearcher singleton) keeps concurrent requests from corrupting
-        # each other's keyword scores. Historically this indexing step was
-        # never invoked, so `_indexed` stayed False and hybrid silently
-        # degraded to semantic-only — this restores the keyword contribution.
+        # Score the candidate set with a REQUEST-LOCAL BM25 index built from
+        # `semantic_results` on every call. Building it locally (instead of on
+        # the shared HybridSearcher singleton) keeps concurrent requests from
+        # corrupting each other's keyword scores.
         bm25 = BM25()
         bm25.index_documents(semantic_results)
 
@@ -493,7 +556,6 @@ class HybridSearcher:
 
         # Combine scores using weighted average
         combined_results = []
-        seen_ids = set()
 
         for result in semantic_results:
             doc_id = result.get("id", "")
@@ -505,7 +567,6 @@ class HybridSearcher:
             result["keyword_score"] = keyword_score
             result["hybrid_score"] = combined
             combined_results.append(result)
-            seen_ids.add(doc_id)
 
         # Sort by hybrid score
         combined_results.sort(key=lambda x: x.get("hybrid_score", 0), reverse=True)
@@ -519,7 +580,7 @@ class HybridSearcher:
 
 class SearchService:
     """
-    Main search service combining all search capabilities.
+    Query parsing, metadata filters, and keyword rescoring over vector results.
     """
 
     def __init__(self):
@@ -609,15 +670,17 @@ class SearchService:
         semantic_results: list[dict[str, Any]],
         apply_filters: bool = True,
         rerank: bool = None,
+        top_k: int = None,
     ) -> list[dict[str, Any]]:
         """
-        Perform advanced search with all features.
+        Rescore and filter vector-search results.
 
         Args:
             query: Raw search query
             semantic_results: Initial semantic search results
             apply_filters: Whether to apply query filters
-            rerank: Whether to apply reranking
+            rerank: Whether to apply cross-encoder reranking (if installed)
+            top_k: Number of results to return (default settings.top_k)
 
         Returns:
             Processed and ranked search results
@@ -625,9 +688,9 @@ class SearchService:
         # Parse query
         parsed = self.parse_query(query)
 
-        # Perform hybrid search
+        # Keyword-rescore the vector candidates
         results = await self.hybrid_searcher.search(
-            parsed.get_semantic_query(), semantic_results, rerank=rerank
+            parsed.get_semantic_query(), semantic_results, top_k=top_k, rerank=rerank
         )
 
         # Apply filters if enabled

@@ -53,7 +53,10 @@ declare global {
       accounts: { oauth2: GoogleAccountsOAuth2 };
     };
     gapi?: {
-      load(api: string, callback: () => void): void;
+      load(
+        api: string,
+        callback: (() => void) | { callback: () => void; onerror?: () => void; timeout?: number; ontimeout?: () => void },
+      ): void;
     };
     Dropbox?: {
       choose(options: DropboxChooserOptions): void;

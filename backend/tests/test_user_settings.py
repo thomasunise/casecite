@@ -237,3 +237,21 @@ class TestModuleLevelConstants:
     def test_settings_dir_is_a_string(self):
         assert isinstance(SETTINGS_DIR, str)
         assert len(SETTINGS_DIR) > 0
+
+
+class TestSettingsDirectory:
+    def test_unwritable_data_dir_fails_loudly_instead_of_using_the_temp_dir(self):
+        """Settings hold a firm's playbook; they must never land in a temp dir."""
+        import importlib
+
+        import app.services.user_settings as module
+        import pytest
+
+        try:
+            with (
+                patch("os.makedirs", side_effect=PermissionError("read-only volume")),
+                pytest.raises(RuntimeError, match="must be writable"),
+            ):
+                importlib.reload(module)
+        finally:
+            importlib.reload(module)

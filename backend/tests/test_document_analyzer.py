@@ -175,3 +175,66 @@ class TestClientConstruction:
             result = await service.analyze_contract(document_text=SAMPLE_CONTRACT)
         assert result["model_used"] == "claude-test-model"
         assert client.messages.create.call_args.kwargs["model"] == "claude-test-model"
+
+    @pytest.mark.asyncio
+    async def test_anthropic_call_is_refused_when_not_on_the_allowlist(self):
+        from app.services.document_analyzer import DocumentAnalyzerService
+
+        service = DocumentAnalyzerService()
+        service.openai_client = None
+        client = MagicMock()
+        service.anthropic_client = client
+
+        with patch("app.services.provider_policy.settings") as policy_settings:
+            policy_settings.hipaa_enforcement_enabled = True
+            policy_settings.approved_ai_providers = ["openai"]
+            result = await service.analyze_contract(document_text=SAMPLE_CONTRACT)
+
+        client.messages.create.assert_not_called()
+        assert "'anthropic' is not approved" in result["error"]
+
+
+class TestAnalysisCoverage:
+    """The analysis reads the whole contract, or says how much it read."""
+
+    @pytest.mark.asyncio
+    async def test_text_past_the_old_8000_character_cut_reaches_the_model(
+        self, analyzer_with_openai
+    ):
+        tail = "SECTION 40. LIMITATION OF LIABILITY IS UNCAPPED."
+        document = ("Recital text. " * 2000) + tail
+        assert len(document) > 8000
+
+        result = await analyzer_with_openai.analyze_contract(document_text=document)
+
+        call = analyzer_with_openai.openai_client.chat.completions.create.call_args
+        assert tail in call.kwargs["messages"][1]["content"]
+        assert result["truncated"] is False
+        assert result["chars_analyzed"] == result["document_chars"] == len(document)
+
+    @pytest.mark.asyncio
+    async def test_document_longer_than_the_window_is_reported_truncated(
+        self, analyzer_with_openai
+    ):
+        document = "x" * 50_000
+        with patch("app.services.document_analyzer.analysis_input_cap_chars", return_value=40_000):
+            result = await analyzer_with_openai.analyze_contract(document_text=document)
+
+        assert result["truncated"] is True
+        assert result["chars_analyzed"] == 40_000
+        assert result["document_chars"] == 50_000
+
+    def test_cap_follows_the_context_window_with_a_floor(self):
+        from app.services.document_analyzer import analysis_input_cap_chars
+
+        with patch(
+            "app.services.contract_analysis.long_drafting.context_window_tokens",
+            return_value=128_000,
+        ):
+            assert analysis_input_cap_chars("gpt-4o", 2000) == (128_000 - 2000 - 3000) * 4
+        with patch(
+            "app.services.contract_analysis.long_drafting.context_window_tokens",
+            return_value=8_000,
+        ):
+            # A small self-hosted window still analyses a usable amount.
+            assert analysis_input_cap_chars("local", 2000) == 40_000

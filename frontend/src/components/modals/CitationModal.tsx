@@ -1,4 +1,4 @@
-import { useState, useEffect, useContext, useId } from 'react';
+import { useContext, useId } from 'react';
 import { Icon } from '../shared/Icon';
 import { ModalShell } from '../shared/ModalShell';
 import { safeHttpUrl } from '../shared/safeUrl';
@@ -11,25 +11,25 @@ import { copyToClipboard } from '../../utils/copyToClipboard';
 import type { Citation, ReasoningStep } from '../../types';
 import s from './CitationModal.module.css';
 
+/** Exact-host check — a prefix test would accept look-alike hosts. */
+function isCourtListenerUrl(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === 'https:' && (hostname === 'www.courtlistener.com' || hostname === 'courtlistener.com');
+  } catch {
+    return false;
+  }
+}
+
 interface CitationModalProps {
   isOpen: boolean;
   onClose: () => void;
   citation: Citation | null;
-  onUpdateStatus: (id: string, status: string, notes: string) => void;
 }
 
-export const CitationModal = ({ isOpen, onClose, citation, onUpdateStatus: _onUpdateStatus }: CitationModalProps) => {
+export const CitationModal = ({ isOpen, onClose, citation }: CitationModalProps) => {
   // Optional: the modal renders anywhere; tracing needs the research state.
   const jumpToDocumentSpan = useContext(ResearchContext)?.jumpToDocumentSpan;
-  const [notes, setNotes] = useState(citation?.notes || '');
-  const [_status, setStatus] = useState(citation?.status || 'pending');
-
-  useEffect(() => {
-    if (citation) {
-      setNotes(citation.notes || '');
-      setStatus(citation.status || 'pending');
-    }
-  }, [citation]);
 
   const id = useId();
 
@@ -74,6 +74,11 @@ export const CitationModal = ({ isOpen, onClose, citation, onUpdateStatus: _onUp
               )}
             </div>
             <h3 className={s.citationSourceTitle}>{citation.source}</h3>
+            {citation.weakMatch && (
+              <p className={s.citationSourceRef}>
+                Weak match — this passage scored below your similarity threshold.
+              </p>
+            )}
             <p className={s.citationSourceRef}>{citation.reference}</p>
             {courtListenerUrl && (
               <a
@@ -148,18 +153,6 @@ export const CitationModal = ({ isOpen, onClose, citation, onUpdateStatus: _onUp
                 ))}
               </div>
             </div>
-
-            <div className={s.sectionBlock}>
-              <h4 id={`${id}-notes`} className={s.sectionTitle}>Review Notes</h4>
-              <textarea
-                aria-labelledby={`${id}-notes`}
-                className={s.textarea}
-                value={notes}
-                onChange={e => setNotes(e.target.value)}
-                placeholder="Add notes about this citation for the case file..."
-                rows={3}
-              />
-            </div>
           </div>
         </div>
 
@@ -186,13 +179,8 @@ export const CitationModal = ({ isOpen, onClose, citation, onUpdateStatus: _onUp
             }}>
               <Icon name="Copy" size={16} /> Copy Citation
             </button>
-            {citation.type === 'case_law' && citation.notes?.includes('CourtListener URL:') && (
-              <button className={s.btnSecondary} onClick={() => {
-                const url = citation.notes.replace('CourtListener URL: ', '');
-                if (url.startsWith('https://www.courtlistener.com/') || url.startsWith('https://courtlistener.com/')) {
-                  window.open(url, '_blank', 'noopener,noreferrer');
-                }
-              }}>
+            {citation.type === 'case_law' && courtListenerUrl && isCourtListenerUrl(courtListenerUrl) && (
+              <button className={s.btnSecondary} onClick={() => window.open(courtListenerUrl, '_blank', 'noopener,noreferrer')}>
                 <Icon name="ExternalLink" size={16} /> View on CourtListener
               </button>
             )}

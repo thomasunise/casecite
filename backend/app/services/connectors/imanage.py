@@ -1,16 +1,24 @@
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 
 class IManageConnector(BaseConnector):
-    """iManage Work connector using OAuth 2.0."""
+    """iManage Work connector using OAuth 2.0.
+
+    NOT VALIDATED AGAINST A LIVE TENANT. The endpoint paths used here
+    (customer discovery, the document listing and the download route) were
+    written from iManage's published API shape and are exercised only by
+    mocked unit tests; no real iManage Work environment has been used to
+    confirm them. Treat this connector as experimental until it has been run
+    against your tenant, and expect to adjust paths for your Work version.
+    """
 
     connector_type = ConnectorType.IMANAGE
 
@@ -92,12 +100,12 @@ class IManageConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token and a resolved customer_id."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
         # The token response does not reliably include customer_id; without it
         # every Work API URL is malformed, so discover it once and persist.
@@ -114,7 +122,7 @@ class IManageConnector(BaseConnector):
             response.raise_for_status()
             customers = response.json().get("data", [])
             if not customers:
-                raise Exception("iManage returned no customers for this account")
+                raise ConnectorError("iManage returned no customers for this account")
             self.credentials["customer_id"] = str(customers[0].get("id", ""))
             self._save_credentials()
 
@@ -154,7 +162,7 @@ class IManageConnector(BaseConnector):
 
         async with httpx.AsyncClient() as client:
             if folder_id:
-                url = f"{self._get_api_url()}/folders/{folder_id}/documents"
+                url = f"{self._get_api_url()}/folders/{quote(folder_id, safe='')}/documents"
             else:
                 # Search for recent documents
                 url = f"{self._get_api_url()}/documents"
@@ -229,12 +237,12 @@ class IManageConnector(BaseConnector):
         await self._ensure_valid_token()
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self._get_api_url()}/documents/{file_id}/download",
+            return await self._download_capped(
+                client,
+                "GET",
+                f"{self._get_api_url()}/documents/{quote(file_id, safe='')}/download",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
             )
-            response.raise_for_status()
-            return response.content
 
 
 imanage_connector = IManageConnector()

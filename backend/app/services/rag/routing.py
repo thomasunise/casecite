@@ -23,6 +23,8 @@ import re
 
 from app.config import settings
 from app.services.llm_clients import make_openai, openai_chat, utility_model
+from app.services.provider_policy import enforce_openai_client
+from app.services.rag.generation import chosen_provider_text, strip_json_fences
 
 logger = logging.getLogger(__name__)
 
@@ -172,8 +174,13 @@ def _api_key(user_keys) -> str | None:
     return settings.openai_api_key
 
 
-async def route_query(query: str, user_keys=None) -> tuple[str, bool, str | None, bool]:
+async def route_query(
+    query: str, user_keys=None, model: str | None = None
+) -> tuple[str, bool, str | None, bool]:
     """Return (intent, use_case_law, search_query, per_file) for a chat message.
+
+    ``model`` is the user's chosen chat model: a Claude/Gemini choice routes the
+    classifier call to that provider instead of the OpenAI-compatible client.
 
     intent: "ask" (grounded Q&A), "research" (outside-authority lookup, do not
     read the documents), "strategy" (full-coverage matter brief), or
@@ -186,9 +193,6 @@ async def route_query(query: str, user_keys=None) -> tuple[str, bool, str | None
     so each file should get its own analysis pass (map-reduce) when the scope
     is a small multi-file set.
     """
-    client = make_openai(_api_key(user_keys), async_=True)
-    if client is None:
-        return (*heuristic_route(query), distill_search_query(query), heuristic_per_file(query))
     prompt = (
         "Classify this message from a lawyer working across their own document "
         "collection.\n\n"
@@ -225,14 +229,27 @@ async def route_query(query: str, user_keys=None) -> tuple[str, bool, str | None
         f"MESSAGE:\n{query[:2000]}"
     )
     try:
-        resp = await openai_chat(
-            client,
-            model=utility_model(),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.0,
-            response_format={"type": "json_object"},
+        content = await chosen_provider_text(
+            prompt, user_keys=user_keys, model=model, max_tokens=300
         )
-        content = resp.choices[0].message.content
+        if content is None:
+            client = make_openai(_api_key(user_keys), async_=True)
+            if client is None:
+                return (
+                    *heuristic_route(query),
+                    distill_search_query(query),
+                    heuristic_per_file(query),
+                )
+            enforce_openai_client(client, "query routing")
+            resp = await openai_chat(
+                client,
+                model=utility_model(),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            content = resp.choices[0].message.content
+        content = strip_json_fences(content)
         intent, use_case_law = parse_route_payload(content, query)
         try:
             per_file = bool(json.loads(content or "{}").get("per_file"))

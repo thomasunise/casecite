@@ -4,13 +4,18 @@ Lets a user create matters, see the matters they belong to, and — as the matte
 owner — invite or remove colleagues by email. Membership is what grants access
 to a matter's documents, chats, and analyses (see app/services/matters.py).
 
+Creating, sharing and deleting a matter decides who can read privileged
+documents, so those actions require the ``matters.manage`` permission and every
+one of them is written to the audit trail. Reading the matters you belong to
+only requires authentication.
+
 Thin HTTP layer: all membership logic lives in the service. Literal routes are
 defined before the parameterized /{matter_id} catch-alls.
 """
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,14 +31,40 @@ from app.models.schemas import (
     MatterResponse,
 )
 from app.services import matters as matters_service
+from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData, get_current_user
+from app.services.permissions import require_permission
+from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/matters", tags=["matters"])
 
 
-async def _to_response(db: AsyncSession, matter: Matter, caller_id: str) -> MatterResponse:
-    role = "owner" if matter.owner_id == caller_id else "member"
+async def _audit(
+    request: Request,
+    current_user: TokenData,
+    event_type: AuditEventType,
+    matter_id: str,
+    details: dict,
+    success: bool = True,
+) -> None:
+    """Audit a matter change. Ids only — matter and client names are confidential."""
+    await audit_service.log_event(
+        event_type=event_type,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="matter",
+        resource_id=matter_id,
+        ip_address=get_client_ip(request),
+        details=details,
+        success=success,
+    )
+
+
+async def _to_response(
+    db: AsyncSession, matter: Matter, caller_id: str, role: str | None = None
+) -> MatterResponse:
+    role = role or ("owner" if matter.owner_id == caller_id else "member")
     return MatterResponse(
         id=matter.id,
         name=matter.name,
@@ -67,6 +98,12 @@ async def _members_with_identity(db: AsyncSession, matter_id: str) -> list[Matte
     return out
 
 
+_ADD_MEMBER_FAILED = (
+    "That person could not be added. Check the email address, and that they "
+    "have an active account on this instance."
+)
+
+
 async def _require_owned_matter(db: AsyncSession, matter_id: str, caller_id: str) -> Matter:
     """Return the matter only if the caller is its owner; else 404 (no existence leak)."""
     matter = await matters_service.get_matter(db, matter_id)
@@ -88,10 +125,43 @@ async def list_matters(
     )
 
 
+@router.get("/all", response_model=MatterListResponse)
+async def list_all_matters(
+    request: Request,
+    current_user: TokenData = require_permission("admin.users"),
+    db: AsyncSession = Depends(get_db),
+) -> MatterListResponse:
+    """Admin oversight: every shared matter on the instance (newest first).
+
+    Lets an administrator review who has set up sharing — names, owners and
+    member counts — without granting access to any matter's content. Personal
+    matters are private workspaces and are not listed. ``role`` is the admin's
+    own role in each matter ("owner", "member", or "none").
+    """
+    rows = await db.execute(
+        select(Matter).where(Matter.is_personal.is_(False)).order_by(Matter.created_at.desc())
+    )
+    mine = set(await matters_service.get_member_matter_ids(db, current_user.user_id))
+    out = []
+    for matter in rows.scalars().all():
+        role = None if matter.id in mine else "none"
+        out.append(await _to_response(db, matter, current_user.user_id, role=role))
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_ACCESS,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="matter",
+        ip_address=get_client_ip(request),
+        details={"action": "admin_list_all_matters", "count": len(out)},
+    )
+    return MatterListResponse(matters=out)
+
+
 @router.post("", response_model=MatterResponse, status_code=201)
 async def create_matter(
     body: CreateMatterRequest,
-    current_user: TokenData = Depends(get_current_user),
+    request: Request,
+    current_user: TokenData = require_permission("matters.manage"),
     db: AsyncSession = Depends(get_db),
 ) -> MatterResponse:
     """Create a shared matter owned by the caller."""
@@ -99,6 +169,13 @@ async def create_matter(
         db, owner_id=current_user.user_id, name=body.name, client_name=body.client_name
     )
     await db.commit()
+    await _audit(
+        request,
+        current_user,
+        AuditEventType.DATA_MODIFICATION,
+        matter.id,
+        {"action": "matter_created"},
+    )
     return await _to_response(db, matter, current_user.user_id)
 
 
@@ -123,7 +200,8 @@ async def get_matter(
 async def add_matter_member(
     matter_id: str,
     body: AddMatterMemberRequest,
-    current_user: TokenData = Depends(get_current_user),
+    request: Request,
+    current_user: TokenData = require_permission("matters.manage"),
     db: AsyncSession = Depends(get_db),
 ) -> MatterDetailResponse:
     """Invite a colleague (by email) to a matter. Owner only."""
@@ -132,15 +210,35 @@ async def add_matter_member(
         raise HTTPException(status_code=400, detail="A personal matter cannot be shared.")
 
     email = body.email.lower().strip()
-    invitee = (await db.execute(select(DBUser).where(DBUser.email == email))).scalar_one_or_none()
+    invitee = (
+        await db.execute(select(DBUser).where(DBUser.email == email, DBUser.is_active.is_(True)))
+    ).scalar_one_or_none()
     if invitee is None:
-        raise HTTPException(status_code=404, detail="No user with that email address.")
+        # One generic answer for "no such account", "deactivated account" and a
+        # mistyped address, so this endpoint cannot be used to probe which email
+        # addresses have accounts. The attempt is audited.
+        await _audit(
+            request,
+            current_user,
+            AuditEventType.DATA_MODIFICATION,
+            matter_id,
+            {"action": "matter_member_add_failed"},
+            success=False,
+        )
+        raise HTTPException(status_code=400, detail=_ADD_MEMBER_FAILED)
 
     try:
         await matters_service.add_member(db, matter_id, invitee.id, added_by=current_user.user_id)
     except matters_service.MatterAccessError as e:
         raise HTTPException(status_code=400, detail=str(e))
     await db.commit()
+    await _audit(
+        request,
+        current_user,
+        AuditEventType.DATA_MODIFICATION,
+        matter_id,
+        {"action": "matter_member_added", "member_user_id": invitee.id},
+    )
 
     base = await _to_response(db, matter, current_user.user_id)
     return MatterDetailResponse(
@@ -153,7 +251,8 @@ async def add_matter_member(
 async def remove_matter_member(
     matter_id: str,
     user_id: str,
-    current_user: TokenData = Depends(get_current_user),
+    request: Request,
+    current_user: TokenData = require_permission("matters.manage"),
     db: AsyncSession = Depends(get_db),
 ) -> MatterDetailResponse:
     """Remove a member from a matter. Owner only; the owner cannot be removed."""
@@ -165,6 +264,13 @@ async def remove_matter_member(
     if not removed:
         raise HTTPException(status_code=404, detail="That user is not a member of this matter.")
     await db.commit()
+    await _audit(
+        request,
+        current_user,
+        AuditEventType.DATA_MODIFICATION,
+        matter_id,
+        {"action": "matter_member_removed", "member_user_id": user_id},
+    )
 
     base = await _to_response(db, matter, current_user.user_id)
     return MatterDetailResponse(
@@ -176,7 +282,8 @@ async def remove_matter_member(
 @router.delete("/{matter_id}")
 async def delete_matter(
     matter_id: str,
-    current_user: TokenData = Depends(get_current_user),
+    request: Request,
+    current_user: TokenData = require_permission("matters.manage"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Delete a matter and its memberships. Owner only; personal matters can't be deleted.
@@ -189,4 +296,7 @@ async def delete_matter(
         raise HTTPException(status_code=400, detail="A personal matter cannot be deleted.")
     await db.delete(matter)  # memberships cascade via MatterMember.matter_id FK
     await db.commit()
+    await _audit(
+        request, current_user, AuditEventType.DATA_DELETION, matter_id, {"action": "matter_deleted"}
+    )
     return {"status": "deleted", "id": matter_id}

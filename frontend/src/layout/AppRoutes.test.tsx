@@ -10,6 +10,8 @@ vi.mock('../views/JudgeIntelView', () => ({ default: () => <div>JudgeIntelView</
 vi.mock('../views/CaseView', () => ({ default: () => <div>CaseView</div> }));
 vi.mock('../views/ToolsView', () => ({ default: () => <div>ToolsView</div> }));
 vi.mock('../views/AuthorityMapView', () => ({ default: () => <div>AuthorityMapView</div> }));
+vi.mock('../views/ResetPasswordView', () => ({ default: () => <div>ResetPasswordView</div> }));
+vi.mock('../views/NotFoundView', () => ({ default: () => <div>Page not found</div> }));
 vi.mock('./AuthOverlay', () => ({ AuthOverlay: () => <div>AuthOverlay</div> }));
 
 import { AppRoutes } from './AppRoutes';
@@ -42,5 +44,23 @@ describe('AppRoutes', () => {
   it('redirects / to /research', async () => {
     renderRoute('/');
     expect(await screen.findByText('ResearchView')).toBeInTheDocument();
+  });
+
+  it('serves the emailed reset link while signed out', async () => {
+    useAuthStore.setState({ isAuthenticated: false });
+    renderRoute('/reset-password?token=abc');
+    expect(await screen.findByText('ResetPasswordView')).toBeInTheDocument();
+    expect(screen.queryByText('AuthOverlay')).toBeNull();
+  });
+
+  it('serves the Authority Map at /case-citations', async () => {
+    renderRoute('/case-citations');
+    expect(await screen.findByText('AuthorityMapView')).toBeInTheDocument();
+  });
+
+  it('shows a not-found page for an unknown path instead of silently redirecting', async () => {
+    renderRoute('/no-such-page');
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+    expect(screen.queryByText('ResearchView')).toBeNull();
   });
 });

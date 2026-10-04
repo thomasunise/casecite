@@ -204,3 +204,65 @@ class TestRetryWithBackoff:
 
         with pytest.raises(CircuitBreakerOpen):
             await retry_with_backoff(func, max_attempts=3, circuit_breaker_name="test-raise")
+
+
+class TestNonRetryableErrors:
+    """Request-level errors (rejected key, bad config) are the caller's fault,
+    not the upstream service's."""
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_error_is_raised_once_and_not_counted(self):
+        func = AsyncMock(side_effect=PermissionError("key rejected"))
+        func.__name__ = "embed"
+
+        with pytest.raises(PermissionError):
+            await retry_with_backoff(
+                func,
+                max_attempts=3,
+                base_delay=0.001,
+                circuit_breaker_name="embeddings:user-a",
+                is_retryable=lambda e: not isinstance(e, PermissionError),
+            )
+
+        assert func.await_count == 1
+        breaker = get_circuit_breaker("embeddings:user-a")
+        assert breaker.failure_count == 0
+        assert breaker.state == CircuitState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_retryable_errors_still_retry_and_count(self):
+        func = AsyncMock(side_effect=ConnectionError("reset"))
+        func.__name__ = "embed"
+
+        with pytest.raises(ConnectionError):
+            await retry_with_backoff(
+                func,
+                max_attempts=3,
+                base_delay=0.001,
+                circuit_breaker_name="embeddings:user-a",
+                is_retryable=lambda e: not isinstance(e, PermissionError),
+            )
+
+        assert func.await_count == 3
+        assert get_circuit_breaker("embeddings:user-a").failure_count == 3
+
+
+class TestBreakerRegistryBound:
+    def test_registry_does_not_grow_without_limit(self):
+        from app.services import resilience
+
+        for i in range(resilience._MAX_CIRCUIT_BREAKERS + 25):
+            get_circuit_breaker(f"embeddings:key-{i}")
+
+        assert len(_circuit_breakers) == resilience._MAX_CIRCUIT_BREAKERS
+        assert "embeddings:key-0" not in _circuit_breakers  # oldest healthy one evicted
+
+    def test_a_tripped_breaker_outlives_healthy_ones(self):
+        from app.services import resilience
+
+        tripped = get_circuit_breaker("embeddings:bad-key")
+        tripped.state = CircuitState.OPEN
+        for i in range(resilience._MAX_CIRCUIT_BREAKERS + 5):
+            get_circuit_breaker(f"embeddings:key-{i}")
+
+        assert _circuit_breakers["embeddings:bad-key"] is tripped

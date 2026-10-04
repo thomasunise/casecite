@@ -6,6 +6,7 @@ import type { DocAnnotation } from '../components/shared/AnnotatedDocument';
 import { extractTextFromFile } from '../utils/extractText';
 import { buildDocAnnotations, mappingToCitation, pushCitations } from '../utils';
 import { useUIStore } from './uiStore';
+import { createJobPoller, toast } from './storeUtils';
 import logger from '../utils/logger';
 
 type Status = 'idle' | 'running' | 'done' | 'error';
@@ -31,13 +32,11 @@ export interface AuthorityMapState {
   loadIndexedDocument: (docId: string, meta: { name?: string; filename?: string }) => Promise<void>;
   clearDocument: () => void;
   run: () => Promise<void>;
+  /** Ask, then delete the stored run behind the current result from the server. */
+  deleteResult: () => void;
 }
 
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
-
-function toast(msg: string, type = 'info') {
-  try { useUIStore.getState().addToast(msg, type); } catch { /* noop */ }
-}
+const jobPoller = createJobPoller();
 
 async function convertToPdfUrl(blob: Blob, filename: string): Promise<string | null> {
   try {
@@ -69,7 +68,7 @@ export const useAuthorityMapStore = create<AuthorityMapState>((set, get) => ({
   closeFilePicker: () => set({ filePickerOpen: false }),
 
   clearDocument: () => {
-    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    jobPoller.stop();
     const prev = get().fileUrl;
     if (prev) URL.revokeObjectURL(prev);
     set({ docText: '', docName: '', fileUrl: null, fileType: null, status: 'idle', error: null, result: null, annotations: [] });
@@ -159,7 +158,7 @@ export const useAuthorityMapStore = create<AuthorityMapState>((set, get) => ({
   run: async () => {
     const { docText, docName, jurisdiction } = get();
     if (!docText.trim()) return;
-    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+    jobPoller.stop();
     set({ status: 'running', error: null, result: null, annotations: [] });
 
     try {
@@ -169,45 +168,58 @@ export const useAuthorityMapStore = create<AuthorityMapState>((set, get) => ({
         jurisdiction: jurisdiction.trim() || null,
       });
 
-      const poll = async (attempt: number) => {
-        try {
-          const job = await api.getAuthorityMapJob(job_id);
-          if (job.status === 'completed') {
-            const result = job.result ?? null;
-            set({ status: 'done', result, annotations: buildDocAnnotations(result?.mappings ?? []) });
-            // Surface authorities in the Sources tab — that panel is the
-            // single home for citations (verified first; unverified stay
-            // reachable there for review instead of in an extra inline panel).
-            if (result?.mappings?.length) {
-              const ordered = [...result.mappings].sort((a, b) => Number(b.verified) - Number(a.verified));
-              pushCitations(ordered.map((m, i) => mappingToCitation(m, i)));
-              useUIStore.getState().setRightPanelTab('sources');
-            }
-            return;
+      jobPoller.start({
+        fetchJob: () => api.getAuthorityMapJob(job_id),
+        maxAttempts: 150,
+        failedMessage: 'Mapping failed.',
+        timeoutMessage: 'Timed out waiting for results.',
+        onCompleted: (job) => {
+          const result = job.result ?? null;
+          set({ status: 'done', result, annotations: buildDocAnnotations(result?.mappings ?? []) });
+          // Surface authorities in the Sources tab — that panel is the
+          // single home for citations (verified first; unverified stay
+          // reachable there for review instead of in an extra inline panel).
+          if (result?.mappings?.length) {
+            const ordered = [...result.mappings].sort((a, b) => Number(b.verified) - Number(a.verified));
+            pushCitations(ordered.map((m, i) => mappingToCitation(m, i)));
+            useUIStore.getState().setRightPanelTab('sources');
           }
-          if (job.status === 'failed' || job.status === 'cancelled') {
-            set({ status: 'error', error: job.error || 'Mapping failed.' });
-            return;
-          }
-          if (attempt > 150) {
-            set({ status: 'error', error: 'Timed out waiting for results.' });
-            return;
-          }
-          pollTimer = setTimeout(() => poll(attempt + 1), 2000);
-        } catch (e) {
-          set({ status: 'error', error: e instanceof Error ? e.message : 'Polling failed.' });
-        }
-      };
-      poll(0);
+        },
+        onFailed: (message) => set({ status: 'error', error: message }),
+      });
     } catch (e) {
       logger.error('authority map submit failed', e);
       set({ status: 'error', error: e instanceof Error ? e.message : 'Failed to start mapping.' });
     }
   },
+
+  deleteResult: () => {
+    const runId = get().result?.run_id;
+    if (!runId) return;
+    useUIStore.getState().showConfirm({
+      title: 'Delete this citation map?',
+      message: 'The stored map, including the quotes taken from your document, is permanently deleted from the server. The document itself is not affected.',
+      type: 'danger',
+      confirmText: 'Delete map',
+      onConfirm: async () => {
+        try {
+          await api.deleteAuthorityMap(runId);
+          // Only clear if the user has not started another run meanwhile.
+          if (get().result?.run_id === runId) {
+            set({ status: 'idle', result: null, annotations: [], error: null });
+          }
+          toast('Citation map deleted.', 'success');
+        } catch (e) {
+          logger.error('authority map delete failed', e);
+          toast(e instanceof Error ? e.message : 'Could not delete the citation map.', 'error');
+        }
+      },
+    });
+  },
 }));
 
 registerReset(() => {
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  jobPoller.stop();
   const url = useAuthorityMapStore.getState().fileUrl;
   if (url) URL.revokeObjectURL(url);
   useAuthorityMapStore.setState(useAuthorityMapStore.getInitialState(), true);

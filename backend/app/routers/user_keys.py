@@ -7,7 +7,7 @@ replacing the previous approach of sending keys in request headers.
 Security Features:
 - Keys are encrypted at rest using AES-256-GCM
 - Keys are never exposed in responses (only status indicators)
-- Keys are scoped per-user
+- Keys are scoped per-user and can be deleted by their owner
 - Audit logging for all key operations
 """
 
@@ -15,7 +15,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.responses.user_keys import (
     KeyMaskedResponse,
@@ -24,6 +24,7 @@ from app.models.responses.user_keys import (
 from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData, get_current_user
 from app.services.key_storage import (
+    delete_user_keys,
     get_user_keys,
     save_user_keys,
 )
@@ -39,8 +40,10 @@ router = APIRouter(prefix="/user/keys", tags=["user-keys"])
 class SaveKeyRequest(BaseModel):
     """Request to save an API key."""
 
-    key_type: str  # "openai", "anthropic", "google", "voyage", "cohere"
-    api_key: str
+    key_type: str = Field(..., max_length=32)  # "openai", "anthropic", "google", ...
+    # Provider keys are well under 300 chars; the cap keeps a multi-megabyte
+    # body from being encrypted into the key store.
+    api_key: str = Field(..., max_length=512)
 
 
 class KeyStatusResponse(BaseModel):
@@ -108,7 +111,7 @@ async def save_api_key(
 
     # Audit log (don't log the actual key)
     await audit_service.log_event(
-        event_type=AuditEventType.SETTINGS_CHANGE,
+        event_type=AuditEventType.API_KEY_CREATED,
         user_id=current_user.user_id,
         user_email=current_user.email,
         resource_type="api_key",
@@ -118,6 +121,52 @@ async def save_api_key(
     )
 
     return {"status": "saved", "key_type": body.key_type}
+
+
+@router.delete("/{key_type}", response_model=KeySaveResponse)
+async def delete_api_key(
+    key_type: str,
+    request: Request,
+    current_user: TokenData = Depends(get_current_user),
+) -> dict:
+    """
+    Delete one of the current user's stored API keys.
+
+    Removes the key from the encrypted store (and the cache). Idempotent:
+    deleting a key that is not stored returns 404 so the UI can tell.
+    """
+    if key_type not in ALLOWED_KEY_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid key type. Allowed: {', '.join(ALLOWED_KEY_TYPES)}",
+        )
+
+    keys = get_user_keys(current_user.user_id)
+    if not keys.get(key_type):
+        raise HTTPException(status_code=404, detail="No stored key of that type")
+
+    del keys[key_type]
+    try:
+        if any(keys.get(k) for k in ALLOWED_KEY_TYPES):
+            keys["_last_updated"] = datetime.now(UTC).isoformat()
+            save_user_keys(current_user.user_id, keys)
+        else:
+            # Last key removed — drop the user's record entirely.
+            delete_user_keys(current_user.user_id)
+    except RuntimeError:
+        raise HTTPException(status_code=503, detail="Key storage temporarily unavailable")
+
+    await audit_service.log_event(
+        event_type=AuditEventType.API_KEY_DELETED,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="api_key",
+        resource_id=key_type,
+        ip_address=get_client_ip(request),
+        details={"action": "api_key_deleted", "key_type": key_type},
+    )
+
+    return {"status": "deleted", "key_type": key_type}
 
 
 @router.get("/status", response_model=KeyStatusResponse)

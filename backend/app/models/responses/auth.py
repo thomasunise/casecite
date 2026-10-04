@@ -10,6 +10,15 @@ class UserInfo(BaseModel):
     email: str
     name: str
     roles: list[str]
+    mfa_enabled: bool = False
+    # True while the account is on an admin-issued temporary password: every
+    # API call except change-password/logout/me returns 403
+    # ``password_change_required`` until the password is changed.
+    must_change_password: bool = False
+    # True when REQUIRE_MFA is on and this password account has not enrolled:
+    # every API call except the MFA enrollment endpoints returns 403
+    # ``mfa_enrollment_required`` until MFA is enabled.
+    mfa_enrollment_required: bool = False
 
 
 class LoginResponse(BaseModel):
@@ -44,8 +53,12 @@ class CurrentUserResponse(BaseModel):
 
     id: str
     email: str
+    name: str = ""
     roles: list[str]
     token_expires: str
+    mfa_enabled: bool = False
+    must_change_password: bool = False
+    mfa_enrollment_required: bool = False
 
 
 class AzureConfigResponse(BaseModel):

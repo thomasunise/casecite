@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useId } from 'react';
 import { api } from '../../api';
 import { useAuthStore } from '../../stores/authStore';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { useUIStore } from '../../stores/uiStore';
 import { Icon } from '../shared/Icon';
 import { ModalShell } from '../shared/ModalShell';
 import type { RagSettings } from '../../types';
@@ -16,6 +18,9 @@ import { BrandingTab } from './rag-settings/BrandingTab';
 import { UsersTab } from './rag-settings/UsersTab';
 import { SourcesTab } from './rag-settings/SourcesTab';
 import { SecurityTab } from './rag-settings/SecurityTab';
+import { AuditTab } from './rag-settings/AuditTab';
+
+const TAB_LABELS: Record<string, string> = { api: 'API Keys', audit: 'Audit Log' };
 
 interface RAGSettingsModalProps {
   isOpen: boolean;
@@ -28,8 +33,25 @@ interface RAGSettingsModalProps {
 export const RAGSettingsModal = ({ isOpen, onClose, settings, onSave }: RAGSettingsModalProps) => {
   const isAuthenticated = useAuthStore((st) => st.isAuthenticated);
   const isAdmin = useAuthStore((st) => (st.user?.roles ?? []).includes('admin') || st.user?.role === 'admin');
+  const serverSettingsLoaded = useSettingsStore((st) => st.serverSettingsLoaded);
+  const serverSettingsError = useSettingsStore((st) => st.serverSettingsError);
+  const loadServerSettings = useSettingsStore((st) => st.loadServerSettings);
+  const requestedTab = useUIStore((st) => st.settingsTab);
   const [local, setLocal] = useState(settings);
   const [activeTab, setActiveTab] = useState('api');
+  const [saving, setSaving] = useState(false);
+
+  // Opened straight onto a tab (e.g. Security when MFA enrollment is required).
+  useEffect(() => {
+    if (isOpen && requestedTab) setActiveTab(requestedTab);
+  }, [isOpen, requestedTab]);
+
+  // Saving is a full replace on the server. If this session's settings never
+  // arrived, retry when the modal opens rather than let "Save" overwrite the
+  // stored playbook, practice profile and prompts with blanks.
+  useEffect(() => {
+    if (isOpen && isAuthenticated && !serverSettingsLoaded) loadServerSettings();
+  }, [isOpen, isAuthenticated, serverSettingsLoaded, loadServerSettings]);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({
@@ -101,9 +123,9 @@ export const RAGSettingsModal = ({ isOpen, onClose, settings, onSave }: RAGSetti
         </div>
 
         <div className={s.tabBar}>
-          {(['api', 'security', 'retrieval', 'embedding', 'generation', 'prompts', 'advanced', ...(isAdmin ? ['sources', 'users', 'branding'] : [])] as const).map(tab => (
+          {(['api', 'security', 'retrieval', 'embedding', 'generation', 'prompts', 'advanced', ...(isAdmin ? ['sources', 'users', 'audit', 'branding'] : [])] as const).map(tab => (
             <button key={tab} className={`tab-btn ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
-              {tab === 'api' ? 'API Keys' : tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {TAB_LABELS[tab] ?? tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
@@ -133,6 +155,9 @@ export const RAGSettingsModal = ({ isOpen, onClose, settings, onSave }: RAGSetti
           {activeTab === 'users' && isAdmin && (
             <UsersTab s={s} />
           )}
+          {activeTab === 'audit' && isAdmin && (
+            <AuditTab s={s} />
+          )}
           {activeTab === 'advanced' && (
             <AdvancedTab local={local} setLocal={setLocal} s={s} />
           )}
@@ -142,9 +167,30 @@ export const RAGSettingsModal = ({ isOpen, onClose, settings, onSave }: RAGSetti
         </div>
 
         <div className={s.modalFooter}>
+          {!serverSettingsLoaded && (
+            <span className={s.helpText} role="status">
+              {serverSettingsError
+                ? 'Your saved settings could not be loaded, so saving is turned off. '
+                : 'Loading your saved settings… '}
+              {serverSettingsError && (
+                <button type="button" className={s.btnSecondaryXSmall} onClick={() => loadServerSettings()}>Retry</button>
+              )}
+            </span>
+          )}
           <button className={s.btnSecondary} onClick={onClose}>Cancel</button>
-          <button className={s.btnPrimary} onClick={async () => { if ((await onSave(local)) !== false) onClose(); }}>
-            <Icon name="Check" size={16} /> Save Changes
+          <button
+            className={s.btnPrimary}
+            disabled={!serverSettingsLoaded || saving}
+            onClick={async () => {
+              setSaving(true);
+              try {
+                if ((await onSave(local)) !== false) onClose();
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            <Icon name="Check" size={16} /> {saving ? 'Saving…' : 'Save Changes'}
           </button>
         </div>
     </ModalShell>

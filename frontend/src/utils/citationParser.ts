@@ -1,6 +1,16 @@
 import { generateId } from './index';
 import type { Citation, ReasoningStep } from '../types';
 
+/** Phrase the backend writes into a citation's ranking step when the passage
+ * scored below the user's similarity threshold (services/rag/citations.py). */
+const WEAK_MATCH_MARKER = 'below your similarity threshold';
+
+/** A score the server actually measured, or undefined — never a default.
+ * The API sends 0 for "no score", so 0 is treated as absent. */
+function measuredScore(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 /**
  * Parse raw citation data from the RAG API response into typed Citation objects.
  *
@@ -12,19 +22,27 @@ import type { Citation, ReasoningStep } from '../types';
 export function parseCitations(rawCitations: unknown[], query?: string): Citation[] {
   return (rawCitations as Record<string, unknown>[]).map((cite, idx) => {
     const type = (cite.type as string) || 'document';
+    const rawConfidence = measuredScore(cite.confidence);
+    const rawReasoning = (cite.reasoning as Record<string, unknown>[]) || [];
+    const weakMatch = cite.below_threshold === true
+      || rawReasoning.some((r) => typeof r.evidence === 'string' && r.evidence.includes(WEAK_MATCH_MARKER));
     return {
       id: (cite.id as string) || generateId(),
       source: (cite.source as string) || `Source ${idx + 1}`,
       type,
-      confidence: Math.min(100, Math.round((cite.confidence as number) > 1 ? (cite.confidence as number) : ((cite.confidence as number) || 0.8) * 100)),
+      // Percent (0-100) when the server measured one; undefined otherwise.
+      confidence: rawConfidence === undefined
+        ? undefined
+        : Math.min(100, Math.round(rawConfidence > 1 ? rawConfidence : rawConfidence * 100)),
       status: (cite.status as Citation['status']) || 'pending',
-      similarity: (cite.similarity as number) || 0.8,
+      similarity: measuredScore(cite.similarity),
+      weakMatch: weakMatch || undefined,
       relevanceRank: (cite.relevance_rank as number) || idx + 1,
       chunkIndex: (cite.chunk_index as number) || idx,
       tokenCount: (cite.token_count as number) || 0,
       passage: (cite.passage as string) || '',
       caseSummary: (cite.case_summary as string) || null,
-      reasoning: ((cite.reasoning as Record<string, unknown>[]) || []).map((r): ReasoningStep => ({
+      reasoning: rawReasoning.map((r): ReasoningStep => ({
         type: (r.type as string) || 'Analysis',
         description: r.description as string,
         evidence: (r.evidence as string) || '',

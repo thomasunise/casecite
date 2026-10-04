@@ -82,9 +82,31 @@ def test_verify_marks_supported_and_unsupported():
     verify_document_citations([supported, unsupported], answer)
 
     assert supported.was_cited_by_ai is True
-    assert supported.status == CitationStatus.APPROVED
     assert unsupported.was_cited_by_ai is False
+    # Verification flags what the answer used; it never approves a citation —
+    # APPROVED is a reviewer's decision.
+    assert supported.status == CitationStatus.PENDING
     assert unsupported.status == CitationStatus.PENDING
+
+
+def test_verify_does_not_treat_a_few_shared_words_as_use():
+    """Regression: three words in common used to mark a passage as relied on
+    (and APPROVED). Two clauses of the same contract always share that much."""
+    passage = (
+        "The Supplier shall maintain commercial general liability insurance with "
+        "limits of not less than two million dollars per occurrence and shall name "
+        "the Customer as an additional insured under each policy."
+    )
+    unrelated = _citation("exhibit_b.pdf", passage)
+    answer = (
+        "The agreement lets the Customer terminate for convenience on thirty days "
+        "written notice; the Supplier shall then invoice the Customer under each "
+        "purchase order, less any disputed amounts."
+    )
+    verify_document_citations([unrelated], answer)
+
+    assert unrelated.was_cited_by_ai is False
+    assert unrelated.status == CitationStatus.PENDING
 
 
 # --- Source tracking ------------------------------------------------------ #

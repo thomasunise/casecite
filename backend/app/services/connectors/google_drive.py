@@ -1,17 +1,22 @@
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
 from app.services import connector_credentials
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 
 class GoogleDriveConnector(BaseConnector):
-    """Google Drive connector using OAuth 2.0."""
+    """Google Drive connector using OAuth 2.0.
+
+    Requests ``drive.readonly`` only: the connector lists and downloads, it
+    never writes. (``drive.file`` is the per-file scope the browser Picker
+    uses with its own token; it adds nothing on top of ``drive.readonly``.)
+    """
 
     connector_type = ConnectorType.GOOGLE_DRIVE
 
@@ -23,7 +28,6 @@ class GoogleDriveConnector(BaseConnector):
         )
 
     SCOPES = [
-        "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/drive.readonly",
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
@@ -98,13 +102,13 @@ class GoogleDriveConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         # Check if token is expired
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:  # 60 second buffer
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
     async def get_account_info(self) -> dict[str, Any]:
         """Get Google account information."""
@@ -133,7 +137,9 @@ class GoogleDriveConnector(BaseConnector):
         # Build query
         query_parts = ["trashed = false"]
         if folder_id:
-            query_parts.append(f"'{folder_id}' in parents")
+            # folder_id is caller-supplied; escape it for the Drive query language.
+            escaped = folder_id.replace("\\", "\\\\").replace("'", "\\'")
+            query_parts.append(f"'{escaped}' in parents")
         else:
             query_parts.append("'root' in parents")
 
@@ -178,7 +184,7 @@ class GoogleDriveConnector(BaseConnector):
         async with httpx.AsyncClient() as client:
             # First, check if it's a Google Doc that needs export
             response = await client.get(
-                f"https://www.googleapis.com/drive/v3/files/{file_id}",
+                f"https://www.googleapis.com/drive/v3/files/{quote(file_id, safe='')}",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
                 params={"fields": "mimeType"},
             )
@@ -192,21 +198,19 @@ class GoogleDriveConnector(BaseConnector):
                 "application/vnd.google-apps.presentation": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             }
 
+            base = f"https://www.googleapis.com/drive/v3/files/{quote(file_id, safe='')}"
+            headers = {"Authorization": f"Bearer {self.credentials['access_token']}"}
             if mime_type in export_map:
-                response = await client.get(
-                    f"https://www.googleapis.com/drive/v3/files/{file_id}/export",
-                    headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
+                return await self._download_capped(
+                    client,
+                    "GET",
+                    f"{base}/export",
+                    headers=headers,
                     params={"mimeType": export_map[mime_type]},
                 )
-            else:
-                response = await client.get(
-                    f"https://www.googleapis.com/drive/v3/files/{file_id}",
-                    headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
-                    params={"alt": "media"},
-                )
-
-            response.raise_for_status()
-            return response.content
+            return await self._download_capped(
+                client, "GET", base, headers=headers, params={"alt": "media"}
+            )
 
 
 google_drive_connector = GoogleDriveConnector()

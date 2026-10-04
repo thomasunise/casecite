@@ -24,10 +24,6 @@ export const EmbeddingTab = ({ local, setLocal, s }: EmbeddingTabProps) => {
       <label className={s.settingLabel} htmlFor={`${id}-dimensions`}>Embedding Dimensions</label>
       <input id={`${id}-dimensions`} type="number" className={s.modalInput} value={local.dimensions} onChange={e => setLocal({...local, dimensions: parseInt(e.target.value)})} />
     </div>
-    <div className={s.settingGroup}>
-      <label className={s.settingLabel} htmlFor={`${id}-batch-size`}>Batch Size</label>
-      <input id={`${id}-batch-size`} type="number" className={s.modalInput} value={local.batchSize || 100} onChange={e => setLocal({...local, batchSize: parseInt(e.target.value)})} />
-    </div>
   </div>
   );
 };

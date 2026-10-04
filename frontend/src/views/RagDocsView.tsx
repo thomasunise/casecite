@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRagDocsStore } from '../stores/ragDocsStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useAuthStore } from '../stores/authStore';
 import { useConnectorsStore } from '../stores/connectorsStore';
 import { Icon } from '../components';
 import type { RagDocument, Connector } from '../types';
@@ -47,6 +48,7 @@ function RagDocsView() {
   } = useRagDocsStore();
   const { ragSettings } = useSettingsStore();
   const { connectors, handleConnectorClick, init: initConnectors } = useConnectorsStore();
+  const isAdmin = useAuthStore((st) => (st.user?.roles ?? []).includes('admin') || st.user?.role === 'admin');
   useEffect(() => { init(); initConnectors(); }, [init, initConnectors]);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [openFolders, setOpenFolders] = useState<Record<string, boolean>>({});
@@ -85,6 +87,11 @@ function RagDocsView() {
             : `${doc.chunk_count || 0} chunks`}
           {doc.created_at && ` · ${new Date(doc.created_at).toLocaleDateString()}`}
         </div>
+        {doc.status !== 'failed' && typeof doc.metadata?.extraction_warning === 'string' && doc.metadata.extraction_warning && (
+          <div className={`${s.docMetaText} ${s.docMetaWarning}`}>
+            Partially indexed: {doc.metadata.extraction_warning}
+          </div>
+        )}
       </div>
       <button
         onClick={() => handleRagDocDelete(doc)}
@@ -166,7 +173,9 @@ function RagDocsView() {
                   <div className={s.sourceInfo}>
                     <span className={s.sourceName}>{connector.name}</span>
                     <span className={s.sourceStatus}>
-                      {connector.configured === false
+                      {connector.adminOnly && !isAdmin
+                        ? 'Admin only'
+                        : connector.configured === false
                         ? 'Not configured'
                         : connector.connected
                           ? `${connector.docs > 1000 ? (connector.docs / 1000).toFixed(1) + 'k' : connector.docs} docs`
@@ -205,7 +214,9 @@ function RagDocsView() {
                         <div className={s.sourceInfo}>
                           <span className={s.sourceName}>{p.name}</span>
                           <span className={s.sourceStatus}>
-                            {live.connected
+                            {live.adminOnly && !isAdmin
+                              ? 'Admin only'
+                              : live.connected
                               ? `${live.docs > 1000 ? (live.docs / 1000).toFixed(1) + 'k' : live.docs} docs`
                               : 'Connect'}
                           </span>

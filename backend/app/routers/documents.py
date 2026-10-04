@@ -20,14 +20,16 @@ from app.models.schemas import (
     MoveDocumentRequest,
 )
 from app.routers._matter_deps import accessible_matter_ids as _accessible_matter_ids
+from app.routers._matter_deps import owned_matter_ids as _owned_matter_ids
 from app.services import matters as matters_service
 from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData
-from app.services.documents import document_service
+from app.services.documents import DocumentDeletionError, document_service
 from app.services.permissions import require_permission
 from app.services.user_keys import UserAPIKeys
 from app.utils.error_handler import handle_service_error
 from app.utils.file_crypto import FileDecryptionError
+from app.utils.http_headers import content_disposition
 from app.utils.ip_resolution import get_client_ip
 
 # Validation config and helpers live in app/utils/upload_validation.py so the
@@ -120,18 +122,33 @@ async def upload_document(
             user_keys=user_keys,
             matter_id=matter_id,
         )
-        return doc
     except HTTPException:
         raise
     except Exception as e:  # surface a clean error, never a bare 500
         raise handle_service_error(e, "Failed to process document", logger)
+
+    await audit_service.log_event(
+        event_type=AuditEventType.DOCUMENT_UPLOAD,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="document",
+        resource_id=doc.id,
+        ip_address=get_client_ip(request),
+        details={
+            "source": "upload",
+            "content_type": content_type,
+            "size": len(content),
+            "matter_id": matter_id,
+        },
+    )
+    return doc
 
 
 @router.get("", response_model=DocumentList)
 async def list_documents(
     source: ConnectorType | None = None,
     status: DocumentStatus | None = None,
-    limit: int = Query(default=100, le=500),
+    limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     current_user: TokenData = require_permission("documents.view"),
     accessible_matters: set[str] = Depends(_accessible_matter_ids),
@@ -184,7 +201,8 @@ async def create_folder(
 
 @router.delete("/folders")
 async def delete_folder(
-    path: str = Query(..., description="Folder path to delete"),
+    request: Request,
+    path: str = Query(..., description="Folder path to delete", max_length=500),
     current_user: TokenData = require_permission("documents.delete"),
 ) -> dict:
     """Delete a folder; its documents move back to General (root)."""
@@ -192,6 +210,15 @@ async def delete_folder(
         document_service.delete_folder(current_user.user_id, path)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    # Folder names are client-identifying, so the entry records the action only.
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_MODIFICATION,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="folder",
+        ip_address=get_client_ip(request),
+        details={"action": "folder_deleted"},
+    )
     return {"status": "deleted", "folders": document_service.list_folders(current_user.user_id)}
 
 
@@ -199,6 +226,7 @@ async def delete_folder(
 async def move_document(
     document_id: str,
     body: MoveDocumentRequest,
+    request: Request,
     current_user: TokenData = require_permission("documents.upload"),
 ) -> dict:
     """Move a document into a folder (null/empty folder_path = General/root)."""
@@ -208,6 +236,15 @@ async def move_document(
         raise HTTPException(status_code=400, detail=str(e))
     if not ok:
         raise HTTPException(status_code=404, detail="Document not found")
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_MODIFICATION,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="document",
+        resource_id=document_id,
+        ip_address=get_client_ip(request),
+        details={"action": "document_moved"},
+    )
     return {"status": "moved", "folder_path": body.folder_path or None}
 
 
@@ -343,14 +380,13 @@ async def get_document_file(
         media_type = "application/octet-stream"
         disposition = "attachment"
 
-    # RFC 5987-safe filename to keep quotes/newlines out of the header.
-    safe_name = doc.filename.replace('"', "").replace("\r", "").replace("\n", "")
-
     return Response(
         content=file_bytes,
         media_type=media_type,
         headers={
-            "Content-Disposition": f'{disposition}; filename="{safe_name}"',
+            # ASCII fallback + RFC 5987 filename* — a raw non-Latin-1 name
+            # (en dash, curly quotes, CJK) would fail header encoding with a 500.
+            "Content-Disposition": content_disposition(disposition, doc.filename),
             "X-Content-Type-Options": "nosniff",
         },
     )
@@ -376,17 +412,45 @@ async def delete_document(
     document_id: str,
     request: Request,
     current_user: TokenData = require_permission("documents.delete"),
-    accessible_matters: set[str] = Depends(_accessible_matter_ids),
+    owned_matters: set[str] = Depends(_owned_matter_ids),
 ) -> DocumentDeleteResponse:
-    """Delete a document (own or shared via a matter). Requires authentication."""
+    """Delete a document. Requires authentication.
+
+    Allowed for the document's owner and for the OWNER of the matter it is
+    filed under. Plain matter members can read a shared document but not
+    delete a colleague's work (404, same as a document they cannot see).
+    """
     try:
         success = await document_service.delete_document(
-            document_id, current_user.user_id, accessible_matter_ids=accessible_matters
+            document_id, current_user.user_id, accessible_matter_ids=owned_matters
         )
         if not success:
             raise HTTPException(status_code=404, detail="Document not found")
     except HTTPException:
         raise
+    except DocumentDeletionError as e:
+        # The search index (or the analyses derived from the document) could not
+        # be cleaned up, so the service left the document in place. Say so
+        # plainly: a generic 500 would read as "maybe deleted".
+        logger.error(f"Document {document_id} could not be deleted: {e}")
+        await audit_service.log_event(
+            event_type=AuditEventType.DOCUMENT_DELETE,
+            user_id=current_user.user_id,
+            user_email=current_user.email,
+            resource_type="document",
+            resource_id=document_id,
+            ip_address=get_client_ip(request),
+            details={"action": "document_delete_failed"},
+            success=False,
+            error="search index cleanup failed",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Could not remove the document from the search index; "
+                "it was not deleted. Try again."
+            ),
+        )
     except (ValueError, KeyError, OSError) as e:
         raise handle_service_error(e, "Failed to delete document", logger)
 

@@ -178,6 +178,28 @@ export const APIKeysTab = ({ local: _local, setLocal: _setLocal, showKeys, setSh
     });
   };
 
+  // ----- Remove a stored provider key -----
+  const handleDeleteKey = (provider: string, label: string) => {
+    showConfirm({
+      title: `Remove your ${label} key?`,
+      message: `The stored ${label} key is deleted from the server. Features that rely on it stop working until you add a key again (or the instance provides one).`,
+      confirmText: 'Remove key',
+      onConfirm: async () => {
+        // A half-typed replacement must not be re-saved after the delete.
+        if (saveTimers.current[provider]) clearTimeout(saveTimers.current[provider]);
+        delete pendingSaves.current[provider];
+        try {
+          await api.deleteApiKey(provider);
+          setApiKeys({ ...apiKeys, [provider]: '' });
+          await refreshKeyStatus();
+          addToast(`${label} key removed`, 'success');
+        } catch (e) {
+          addToast(e instanceof Error ? e.message : `Failed to remove the ${label} key`, 'error');
+        }
+      },
+    });
+  };
+
   // ----- Local model endpoint (auto-save, debounced) -----
   const llmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSaveLlm = (next: { baseUrl: string; chatModel: string; utilityModel: string }) => {
@@ -216,6 +238,9 @@ export const APIKeysTab = ({ local: _local, setLocal: _setLocal, showKeys, setSh
       },
     });
   };
+
+  // Provider keys this user has stored server-side (each can be removed).
+  const storedKeys = statusItems.filter((item) => serverKeyStatus[item.key]);
 
   return (
     <div className={s.settingsGrid}>
@@ -256,6 +281,27 @@ export const APIKeysTab = ({ local: _local, setLocal: _setLocal, showKeys, setSh
           {Object.values(serverKeyStatus).some(Boolean) && ' Saved keys are shown masked below — leave a field empty to keep your existing key.'}
         </p>
       </div>
+
+      {storedKeys.length > 0 && (
+        <div className={s.keyStatusSection}>
+          <div className={s.keyStatusTitle}>Your stored keys</div>
+          {storedKeys.map((item) => (
+            <div key={item.key} className={s.storedKeyRow}>
+              <span>
+                {item.label}
+                {maskedKeys[item.key] && <span className={s.helpText}> · {maskedKeys[item.key]}</span>}
+              </span>
+              <button
+                type="button"
+                className={s.btnDangerXSmall}
+                onClick={() => handleDeleteKey(item.key, item.label)}
+              >
+                <Icon name="Trash2" size={12} /> Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ===== Case Law ===== */}
       <div className={s.sectionTitle}>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Icon } from './Icon';
 import type { JudgeIntelProfile, JudgeEducation, JudgePosition, DocketEntry } from '../../types';
+import { safeHttpUrl } from './safeUrl';
 
 interface OpinionsByCourtItem {
   court: string;
@@ -120,7 +121,7 @@ function JudgeProfileTab({
               <div className={s.judgeProfileItemRow}>
                 <strong>{d.case_name}</strong>
                 {d.url ? (
-                  <a href={String(d.url)} target="_blank" rel="noopener noreferrer" className={s.judgeProfileItemLink} title="View docket on CourtListener">
+                  <a href={safeHttpUrl(d.url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.judgeProfileItemLink} title="View docket on CourtListener">
                     <Icon name="ExternalLink" size={12} />
                   </a>
                 ) : null}

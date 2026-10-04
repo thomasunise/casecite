@@ -67,6 +67,17 @@ function AuthorityMapCard({ result, onCitationSelect }: AuthorityMapCardProps) {
           </div>
         );
       })}
+      {(result.coverage_notes?.length ?? 0) > 0 && (
+        <div className={s.coverage} role="note">
+          <Icon name="AlertCircle" size={12} className={s.coverageIcon} />
+          <div>
+            Not every file was covered in full:
+            <ul className={s.coverageList}>
+              {result.coverage_notes?.map((note, i) => <li key={i}>{note}</li>)}
+            </ul>
+          </div>
+        </div>
+      )}
       <AiNotice />
     </div>
   );

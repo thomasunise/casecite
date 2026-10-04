@@ -3,7 +3,6 @@ import type {
   ContractAnalysisJob,
   ContractAnalysisListItem,
   ContractAnalysisResult,
-  ContractAnalyzePayload,
   ContractChatResponse,
   ContractCompareStarted,
   ContractJobStarted,
@@ -11,19 +10,6 @@ import type {
 } from './types';
 
 Object.assign(api, {
-  async analyzeContract(payload: ContractAnalyzePayload): Promise<{ job_id: string; poll_url?: string }> {
-    return api.request('/contract-analysis/analyze?async=true', {
-      method: 'POST',
-      body: JSON.stringify({
-        document_id: payload.documentId ?? null,
-        document_text: payload.documentText ?? null,
-        contract_type: payload.contractType ?? 'auto',
-        representing: payload.representing ?? null,
-        posture: payload.posture ?? 'balanced',
-      }),
-    });
-  },
-
   async getContractJob(jobId: string): Promise<ContractAnalysisJob> {
     return api.request(`/jobs/${jobId}`);
   },
@@ -34,6 +20,10 @@ Object.assign(api, {
 
   async getContractAnalysis(id: string): Promise<ContractAnalysisResult> {
     return api.request(`/contract-analysis/analyses/${encodeURIComponent(id)}`);
+  },
+
+  async deleteContractAnalysis(id: string): Promise<{ status: string; id: string }> {
+    return api.request(`/contract-analysis/analyses/${encodeURIComponent(id)}`, { method: 'DELETE' });
   },
 
   async contractChat(documentId: string | null, message: string, mode?: string, draftText?: string, referenceIds?: string[]): Promise<ContractChatResponse> {

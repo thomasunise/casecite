@@ -6,6 +6,7 @@ import { DocketDetailView } from './DocketDetailView';
 import type { DocketDetail } from './DocketDetailView';
 import { TrendChart } from './TrendChart';
 import type { CaseInfo, JudgeSearchResult } from '../../types';
+import { safeHttpUrl } from './safeUrl';
 
 export interface TrendYear { year: number; count: number }
 interface PrecedentResult {
@@ -265,7 +266,7 @@ function ToolResultsArea({
                 {body}
                 {p.url && (
                   <a
-                    href={p.url}
+                    href={safeHttpUrl(p.url) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
@@ -276,7 +277,7 @@ function ToolResultsArea({
                 )}
               </div>
             ) : p.url ? (
-              <a key={i} className={`${s.resultRow} ${s.resultRowLink}`} href={p.url} target="_blank" rel="noopener noreferrer">
+              <a key={i} className={`${s.resultRow} ${s.resultRowLink}`} href={safeHttpUrl(p.url) ?? undefined} target="_blank" rel="noopener noreferrer">
                 {body}
                 <Icon name="ExternalLink" size={14} className={s.resultRowLinkIcon} />
               </a>
@@ -341,7 +342,7 @@ function ToolResultsArea({
                 {body}
                 {d.url && (
                   <a
-                    href={d.url}
+                    href={safeHttpUrl(d.url) ?? undefined}
                     target="_blank"
                     rel="noopener noreferrer"
                     onClick={(e) => e.stopPropagation()}
@@ -352,7 +353,7 @@ function ToolResultsArea({
                 )}
               </div>
             ) : d.url ? (
-              <a key={i} className={`${s.resultRow} ${s.resultRowLink}`} href={d.url} target="_blank" rel="noopener noreferrer">
+              <a key={i} className={`${s.resultRow} ${s.resultRowLink}`} href={safeHttpUrl(d.url) ?? undefined} target="_blank" rel="noopener noreferrer">
                 {body}
                 <Icon name="ExternalLink" size={14} className={s.resultRowLinkIcon} />
               </a>
@@ -393,12 +394,12 @@ function ToolResultsArea({
                 ) : null}
                 <div className={s.oralArgLinks}>
                   {a.url && (
-                    <a href={a.url} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
+                    <a href={safeHttpUrl(a.url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
                       <Icon name="ExternalLink" size={12} /> {a.audio_url ? 'View on CourtListener' : 'Listen on CourtListener'}
                     </a>
                   )}
                   {a.download_url && a.download_url !== a.audio_url && (
-                    <a href={a.download_url} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
+                    <a href={safeHttpUrl(a.download_url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
                       <Icon name="Download" size={12} /> Court's original recording
                     </a>
                   )}

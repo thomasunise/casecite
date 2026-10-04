@@ -2,12 +2,13 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 # Filevine sessions are short-lived; re-handshake well before the documented
 # lifetime so long crawls never ride an expired session.
@@ -28,13 +29,29 @@ class FilevineConnector(BaseConnector):
     POST /session with the API key, an ISO-8601 UTC timestamp, and
     md5(key/timestamp/secret). The session's access token, user id, and
     org id are then sent on every API call.
+
+    Access model: the API key is one firm-wide credential, so a session sees
+    every project the key can see — Filevine's per-user project permissions
+    do not apply. Two controls keep that from reaching ordinary users:
+
+    * the connector stays off until an administrator sets
+      ``FILEVINE_ENABLED=true`` alongside the key and secret, and
+    * ``requires_admin`` makes the router refuse connect/sync/disconnect to
+      anyone without the ``admin.settings`` permission, and report the
+      connector as not connected to everyone else.
+
+    Per-user Filevine credentials would lift the restriction, but the
+    key + secret handshake has no per-user equivalent here.
     """
 
     connector_type = ConnectorType.FILEVINE
+    requires_admin = True
 
     @property
     def is_configured(self) -> bool:
-        return bool(settings.filevine_api_key and settings.filevine_api_secret)
+        return bool(
+            settings.filevine_enabled and settings.filevine_api_key and settings.filevine_api_secret
+        )
 
     def __init__(self):
         super().__init__()
@@ -42,7 +59,7 @@ class FilevineConnector(BaseConnector):
 
     @property
     def is_connected(self) -> bool:
-        """API-key connectors are 'connected' whenever they are configured."""
+        """Configured and explicitly enabled; the router adds the admin gate."""
         return self.is_configured
 
     def get_auth_url(self, state: str) -> str:
@@ -65,7 +82,7 @@ class FilevineConnector(BaseConnector):
     async def _create_session(self) -> None:
         """Perform the signed session handshake and cache the session."""
         if not self.is_configured:
-            raise Exception("Filevine API key and secret are not configured")
+            raise ConnectorError("Filevine is not enabled or its API key/secret are missing")
 
         timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
         raw = f"{settings.filevine_api_key}/{timestamp}/{settings.filevine_api_secret}"
@@ -86,7 +103,7 @@ class FilevineConnector(BaseConnector):
 
         access_token = data.get("accessToken") or data.get("authToken") or ""
         if not access_token:
-            raise Exception("Filevine session response contained no access token")
+            raise ConnectorError("Filevine session response contained no access token")
 
         creds = dict(self.credentials)
         creds.update(
@@ -198,7 +215,7 @@ class FilevineConnector(BaseConnector):
         """List documents in a specific project."""
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{self.base_url}/core/projects/{project_id}/docs",
+                f"{self.base_url}/core/projects/{quote(project_id, safe='')}/docs",
                 headers=self._get_headers(),
                 params={"requestedPage": page, "pageSize": 50},
             )
@@ -270,14 +287,13 @@ class FilevineConnector(BaseConnector):
         """Download a file from Filevine."""
         await self._ensure_session()
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.base_url}/core/docs/{file_id}/download",
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            return await self._download_capped(
+                client,
+                "GET",
+                f"{self.base_url}/core/docs/{quote(file_id, safe='')}/download",
                 headers=self._get_headers(),
-                follow_redirects=True,
             )
-            response.raise_for_status()
-            return response.content
 
 
 filevine_connector = FilevineConnector()

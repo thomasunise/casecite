@@ -14,14 +14,6 @@ from ._models import JudgeCacheDB
 class CacheMixin:
     """Cache helpers for judge data persistence."""
 
-    def _check_token(self):
-        """Raise error if no API token configured."""
-        if not self.api_token:
-            raise ValueError(
-                "CourtListener API token required for Judge Intelligence. "
-                "Add COURTLISTENER_API_TOKEN to your .env file."
-            )
-
     async def _get_cache(self, judge_id: int) -> JudgeCacheDB | None:
         """Retrieve the cache row for a judge, or None."""
         async with get_db_context() as db:

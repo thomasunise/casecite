@@ -2,7 +2,21 @@ import { create } from 'zustand';
 import { api } from '../api';
 import { useUIStore } from './uiStore';
 import { resetAllStores } from './resetRegistry';
+import { clearStoredRagSettings } from '../utils/storageKeys';
+import { validateNewPassword } from '../utils/passwordPolicy';
 import type { UserInfo } from '../api/types';
+
+/**
+ * Drop everything that belongs to the signed-in user on this device: the
+ * locally cached settings (the negotiating playbook and practice profile are
+ * confidential work product) and every store holding their research,
+ * contracts, drafts, judge intel or open document blobs — so the next
+ * sign-in on a shared workstation starts clean.
+ */
+function clearLocalSession() {
+  clearStoredRagSettings();
+  resetAllStores();
+}
 
 export interface AuthState {
   // Core auth
@@ -34,6 +48,11 @@ export interface AuthState {
   setSignupConfirmPassword: (val: string) => void;
   signupCompany: string;
   setSignupCompany: (val: string) => void;
+  /** REGISTRATION_BOOTSTRAP_TOKEN — needed only to create the first admin. */
+  signupBootstrapToken: string;
+  setSignupBootstrapToken: (val: string) => void;
+  /** The server said the setup token is required (or the one given was wrong). */
+  signupNeedsBootstrapToken: boolean;
   signupError: string;
   signupLoading: boolean;
 
@@ -55,6 +74,22 @@ export interface AuthState {
   mfaLoading: boolean;
   handleMfaVerifySubmit: () => Promise<void>;
   cancelMfaChallenge: () => void;
+
+  // Change password (voluntary from Settings, or forced for an account still
+  // on an admin-issued temporary password)
+  showChangePassword: boolean;
+  setShowChangePassword: (val: boolean) => void;
+  changePasswordError: string;
+  changePasswordLoading: boolean;
+  /** Resolves true when the password was changed (the user is then signed out). */
+  handleChangePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => Promise<boolean>;
+
+  /** Forget the session on this device without calling the server (it is already gone there). */
+  clearSession: () => void;
+  /** Re-read the signed-in user's flags (e.g. after enrolling in MFA). */
+  refreshUser: () => Promise<void>;
+  /** Revoke every session for this account, on every device, then sign out here. */
+  handleLogoutEverywhere: () => Promise<void>;
 
   // Handlers
   handleLogin: () => void;
@@ -96,6 +131,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   setSignupConfirmPassword: (val) => set({ signupConfirmPassword: val }),
   signupCompany: '',
   setSignupCompany: (val) => set({ signupCompany: val }),
+  signupBootstrapToken: '',
+  setSignupBootstrapToken: (val) => set({ signupBootstrapToken: val }),
+  signupNeedsBootstrapToken: false,
   signupError: '',
   signupLoading: false,
 
@@ -115,6 +153,79 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   setMfaCode: (val) => set({ mfaCode: val }),
   mfaError: '',
   mfaLoading: false,
+
+  // Change password state
+  showChangePassword: false,
+  setShowChangePassword: (val) => set({ showChangePassword: val, changePasswordError: '' }),
+  changePasswordError: '',
+  changePasswordLoading: false,
+
+  handleChangePassword: async (currentPassword, newPassword, confirmPassword) => {
+    const { addToast } = useUIStore.getState();
+    if (!currentPassword) {
+      set({ changePasswordError: 'Enter your current password' });
+      return false;
+    }
+    const problem = validateNewPassword(newPassword, confirmPassword);
+    if (problem) {
+      set({ changePasswordError: problem });
+      return false;
+    }
+    if (newPassword === currentPassword) {
+      set({ changePasswordError: 'Choose a password different from your current one' });
+      return false;
+    }
+    set({ changePasswordLoading: true, changePasswordError: '' });
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      // The server revokes every session on a password change (this one
+      // included) — sign in again with the new password.
+      const email = get().user?.email ?? '';
+      api.token = null;
+      clearLocalSession();
+      set({
+        user: null, isAuthenticated: false,
+        showChangePassword: false,
+        showLoginModal: true, loginEmail: email, loginPassword: '', loginError: '',
+      });
+      addToast('Password changed. Sign in with your new password.', 'success');
+      return true;
+    } catch (error: unknown) {
+      set({ changePasswordError: error instanceof Error ? error.message : 'Could not change your password' });
+      return false;
+    } finally {
+      set({ changePasswordLoading: false });
+    }
+  },
+
+  clearSession: () => {
+    api.token = null;
+    clearLocalSession();
+    set({ user: null, isAuthenticated: false, showChangePassword: false });
+  },
+
+  refreshUser: async () => {
+    try {
+      const user = await api.getCurrentUser();
+      set({ user });
+    } catch { /* the 401 path in api.request already handles a dead session */ }
+  },
+
+  handleLogoutEverywhere: async () => {
+    const { addToast } = useUIStore.getState();
+    try {
+      await api.logoutAllSessions();
+    } catch (error: unknown) {
+      addToast(error instanceof Error ? error.message : 'Could not sign out your other sessions', 'error');
+      return;
+    }
+    clearLocalSession();
+    set({
+      user: null, isAuthenticated: false,
+      loginEmail: '', loginPassword: '', loginError: '',
+    });
+    addToast('Signed out on every device', 'info');
+  },
 
   // Handlers
   handleLogin: () => {
@@ -147,17 +258,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ signupError: 'Please enter a valid email address', signupLoading: false });
       return;
     }
-    if (state.signupPassword.length < 12) {
-      set({ signupError: 'Password must be at least 12 characters', signupLoading: false });
-      return;
-    }
-    if (!/[A-Z]/.test(state.signupPassword) || !/[a-z]/.test(state.signupPassword) ||
-        !/\d/.test(state.signupPassword) || !/[^A-Za-z0-9]/.test(state.signupPassword)) {
-      set({ signupError: 'Password must include uppercase, lowercase, number, and special character', signupLoading: false });
-      return;
-    }
-    if (state.signupPassword !== state.signupConfirmPassword) {
-      set({ signupError: 'Passwords do not match', signupLoading: false });
+    const passwordProblem = validateNewPassword(state.signupPassword, state.signupConfirmPassword);
+    if (passwordProblem) {
+      set({ signupError: passwordProblem, signupLoading: false });
       return;
     }
     try {
@@ -166,6 +269,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         state.signupName.trim(),
         state.signupPassword,
         state.signupCompany.trim(),
+        state.signupBootstrapToken.trim() || undefined,
       );
 
       set({
@@ -174,11 +278,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         showSignupModal: false,
         signupName: '', signupEmail: '', signupPassword: '',
         signupConfirmPassword: '', signupCompany: '',
+        signupBootstrapToken: '', signupNeedsBootstrapToken: false,
       });
       addToast('Account created.', 'success');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Signup failed. Please try again.';
-      set({ signupError: message });
+      // A fresh instance only lets its first (admin) account be created with
+      // the operator's setup token — reveal the field when the server asks.
+      set({ signupError: message, ...(/bootstrap token/i.test(message) ? { signupNeedsBootstrapToken: true } : {}) });
     } finally {
       set({ signupLoading: false });
     }
@@ -274,18 +381,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   handleLogout: async () => {
     const { addToast } = useUIStore.getState();
     await api.logout();
-    // Purge locally-cached confidential work product (the negotiating playbook
-    // and practice profile live in wl_rag_settings) so it doesn't linger on a
-    // shared machine after sign-out. The server remains the source of truth.
-    try {
-      localStorage.removeItem('wl_rag_settings');
-    } catch { /* storage unavailable — nothing to clear */ }
-    // Every store holding this user's work (research, contracts, drafts,
-    // judge intel, open document blobs…) goes back to its initial state so
-    // the next sign-in on a shared workstation starts clean.
-    resetAllStores();
+    clearLocalSession();
     set({
-      user: null, isAuthenticated: false,
+      user: null, isAuthenticated: false, showChangePassword: false,
       loginEmail: '', loginPassword: '', loginError: '',
     });
     addToast('Signed out', 'info');

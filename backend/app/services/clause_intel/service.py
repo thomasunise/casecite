@@ -227,6 +227,7 @@ class ClauseIntelService:
                     "constraints": f.constraints,
                     "authorities": f.authorities,
                     "recommended_text": f.recommended_text,
+                    "as_of": f.as_of,
                 }
                 for f in jurisdiction_flags
             ],

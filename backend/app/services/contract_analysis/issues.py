@@ -44,6 +44,11 @@ VALID_SEVERITIES = {"critical", "major", "minor"}
 
 _SEVERITY_ORDER = {"critical": 0, "major": 1, "minor": 2}
 _MATCHED_TEXT_LIMIT = 200
+# A jurisdiction note ends with its as-of caveat; never cut that off.
+_JURISDICTION_NOTE_LIMIT = 700
+# Only the contract-TYPE classifier reads this much (the title, recitals and
+# opening clauses identify the type). It is not an analysis cap: issue
+# detection reads the whole document (see ai_review).
 _DETECT_TEXT_LIMIT = 6000
 
 # Mechanical status when the LLM gives none / an invalid one.
@@ -129,7 +134,7 @@ def collect_findings(
             {
                 "ref": f"jur-{i}",
                 "kind": "jurisdiction",
-                "name": (f.get("note") or f"Jurisdiction issue: {slug}")[:_MATCHED_TEXT_LIMIT],
+                "name": (f.get("note") or f"Jurisdiction issue: {slug}")[:_JURISDICTION_NOTE_LIMIT],
                 "severity": _severity(f.get("severity"), "major"),
                 "matched_text": "",
                 "span_start": None,

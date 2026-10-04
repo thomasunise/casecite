@@ -49,11 +49,13 @@ class TestAuthRouter:
 
     async def test_refresh_token(self, client):
         """POST /auth/refresh with a valid refresh-token COOKIE returns a new
-        access token. The user must exist and be active in the database."""
+        access token. The user must exist and be active in the database, and
+        the token must belong to a live sign-in session."""
         import uuid
         from datetime import datetime
 
         from app.database import AsyncSessionLocal
+        from app.middleware.security import session_manager
         from app.models.db_models import User as DBUser
         from app.services.auth import User, UserRole, auth_service
         from app.services.passwords import hash_password
@@ -82,7 +84,16 @@ class TestAuthRouter:
                 roles=[UserRole.ATTORNEY],
                 last_login=datetime.now(UTC),
             )
-            refresh_token = auth_service.create_refresh_token(test_user)
+            # A refresh token with no session behind it mints nothing.
+            orphan = auth_service.create_refresh_token(test_user, session_id="no-such-session")
+            client.cookies.set("refresh_token", orphan)
+            assert client.post("/api/v1/auth/refresh").status_code == 401
+            client.cookies.clear()
+
+            session_manager.create_session(
+                uid, "testclient", "pytest", "jti-old", session_id="sid-1"
+            )
+            refresh_token = auth_service.create_refresh_token(test_user, session_id="sid-1")
             client.cookies.set("refresh_token", refresh_token)
 
             response = client.post("/api/v1/auth/refresh")
@@ -91,7 +102,8 @@ class TestAuthRouter:
             assert "access_token" in data
             assert data["token_type"] == "bearer"
         finally:
-            client.cookies.delete("refresh_token")
+            client.cookies.clear()
+            session_manager.terminate_all_sessions(uid)
             async with AsyncSessionLocal() as session:
                 row = await session.get(DBUser, uid)
                 if row is not None:

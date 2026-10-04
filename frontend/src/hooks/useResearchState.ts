@@ -5,7 +5,7 @@ import { registerReset } from '../stores/resetRegistry';
 import { generateId, parseUtcDate, mappingToCitation, fetchDocumentPdfUrl } from '../utils';
 import { parseCitations } from '../utils/citationParser';
 import logger from '../utils/logger';
-import type { ChatMessage, Citation, SessionStats, DocumentFilter, RagSettings, ChatStats } from '../types';
+import type { ChatMessage, Citation, DocumentFilter, ChatStats } from '../types';
 import type { ChatSessionSummary, ChatSessionMessage, StrategyBriefResponse, AuthorityMapChatResult, AuthorityMapping } from '../api/types';
 import type { DocAnnotation } from '../components/shared/AnnotatedDocument';
 import { setCitationsSink } from '../utils/citationsBridge';
@@ -58,8 +58,9 @@ export interface OpenDoc {
 /** Poll a chat-triggered authority-map job to completion (~20 min budget —
     it reads every scoped file and verifies each authority against the real
     opinion text). */
-async function pollAuthorityMapChatJob(jobId: string): Promise<AuthorityMapChatResult> {
+async function pollAuthorityMapChatJob(jobId: string, signal: AbortSignal): Promise<AuthorityMapChatResult> {
   for (let attempt = 0; attempt < 400; attempt++) {
+    if (signal.aborted) throw new DOMException('Cancelled', 'AbortError');
     const job = await api.getChatAuthorityMapJob(jobId);
     if (job.status === 'completed') {
       if (!job.result) throw new Error('The authority map returned no result.');
@@ -92,17 +93,20 @@ function mapStoredStats(stats: Record<string, unknown> | null, citationCount: nu
  *
  * @param {Object} params
  * @param {Function} params.addToast
- * @param {Object}   params.ragSettings        - Current RAG configuration
  * @param {string}   params.activeMode         - Current navigation mode
  * @param {Function} params.setActiveMode      - Mode setter (for history click)
  */
-export function useResearchState({ addToast, ragSettings, activeMode, setActiveMode }: { addToast: (msg: string, type?: string) => void; ragSettings: RagSettings; activeMode: string; setActiveMode: (mode: string) => void }) {
+export function useResearchState({ addToast, activeMode, setActiveMode }: { addToast: (msg: string, type?: string) => void; activeMode: string; setActiveMode: (mode: string) => void }) {
   // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [exportingConversation, setExportingConversation] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingStage, setProcessingStage] = useState('');
+  // When the in-flight request started (ms epoch) — the view shows real
+  // elapsed time instead of invented progress stages.
+  const [processingStartedAt, setProcessingStartedAt] = useState<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Citations. The Sources panel accumulates per-exchange within the ACTIVE
   // conversation — every question keeps its own group (tagged messageId +
@@ -111,7 +115,6 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
   // citations from dead sessions must not haunt the panel.
   const [selectedCitation, setSelectedCitation] = useState<Citation | null>(null);
   const [allCitations, setAllCitations] = useState<Citation[]>([]);
-  const [citationFilter, setCitationFilter] = useState('all');
 
   // Stores (e.g. authorityMapStore) surface citations into the Sources panel
   // through this sink — registered like the shared navigate reference in
@@ -144,11 +147,6 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
   const [chatSessions, setChatSessions] = useState<ChatSessionSummary[]>([]);
   const [isLoadingSessions, setIsLoadingSessions] = useState(false);
   const sessionsLoadedRef = useRef(false);
-
-  // Session stats
-  const [sessionStats, setSessionStats] = useState<SessionStats>({
-    queries: 0, citations: 0, approved: 0, rejected: 0, pending: 0,
-  });
 
   // Scope is the only client-side control (set from the file workspace —
   // null = all documents, the default); intent (ask vs strategy vs authority
@@ -214,20 +212,21 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
   // blobs — research state lives in this hook, not a store, so it registers
   // with the same registry the stores use.
   useEffect(() => registerReset(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     setMessages([]);
     setInputValue('');
     setIsProcessing(false);
     setProcessingStage('');
+    setProcessingStartedAt(null);
     setSelectedCitation(null);
     setAllCitations([]);
-    setCitationFilter('all');
     setPendingMessageJump(null);
     setHoveredCitationId(null);
     setCurrentSessionId(null);
     setChatSessions([]);
     setIsLoadingSessions(false);
     sessionsLoadedRef.current = false;
-    setSessionStats({ queries: 0, citations: 0, approved: 0, rejected: 0, pending: 0 });
     setMainDocFilter(null);
     setOpenDocs((prev: OpenDoc[]) => {
       for (const d of prev) if (d.fileUrl) URL.revokeObjectURL(d.fileUrl);
@@ -318,24 +317,21 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
 
     const startTime = Date.now();
 
-    const stages = ['Thinking...', 'Analyzing documents...', 'Searching knowledge base...', 'Generating response...'];
-    let stageIndex = 0;
-    setProcessingStage(stages[0]);
-    const stageInterval = setInterval(() => {
-      stageIndex = (stageIndex + 1) % stages.length;
-      setProcessingStage(stages[stageIndex]);
-    }, 2000);
+    // The request is a single round trip — there is no server-reported
+    // progress to show, so say only what is true and let the view count the
+    // elapsed time. Retrieval depth and thresholds come from the user's saved
+    // settings server-side.
+    setProcessingStage('Working…');
+    setProcessingStartedAt(startTime);
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const response = await api.query(query, activeMode, {
-        topK: ragSettings.topK,
-        similarityThreshold: ragSettings.similarityThreshold,
         includeDocuments: true,
         documentFilter: mainDocFilter as unknown as string | null,
         sessionId: currentSessionId,
-      });
-
-      clearInterval(stageInterval);
+      }, controller.signal);
 
       // Chat-triggered authority map: the backend submitted a background job.
       // Show its acknowledgement, poll the job, then post the audit result as
@@ -354,7 +350,7 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
         setProcessingStage(
           `Mapping case law across ${jobInfo.documents.length} file${jobInfo.documents.length === 1 ? '' : 's'}…`
         );
-        const mapResult = await pollAuthorityMapChatJob(jobInfo.job_id);
+        const mapResult = await pollAuthorityMapChatJob(jobInfo.job_id, controller.signal);
         const mapMsgId = generateId();
         const mapCitations: Citation[] = [];
         mapResult.files.forEach((f, fi) => {
@@ -385,14 +381,6 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
         };
         setMessages((prev: ChatMessage[]) => [...prev, resultMsg]);
         setAllCitations((prev: Citation[]) => [...prev, ...mapCitations]);
-        setSessionStats((prev: SessionStats) => ({
-          ...prev,
-          queries: prev.queries + 1,
-          citations: prev.citations + mapCitations.length,
-          pending: prev.pending + mapCitations.length,
-        }));
-        setIsProcessing(false);
-        setProcessingStage('');
         return;
       }
 
@@ -422,12 +410,6 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
 
       setMessages((prev: ChatMessage[]) => [...prev, assistantMsg]);
       setAllCitations((prev: Citation[]) => [...prev, ...citations]);
-      setSessionStats((prev: SessionStats) => ({
-        ...prev,
-        queries: prev.queries + 1,
-        citations: prev.citations + citations.length,
-        pending: prev.pending + citations.length,
-      }));
 
       // Adopt the server-side session (created on first exchange) and keep
       // the History tab in sync once it has been loaded.
@@ -437,45 +419,43 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
       }
 
     } catch (error: unknown) {
-      clearInterval(stageInterval);
-      logger.error('RAG query error:', error);
-      addToast(error instanceof Error ? error.message : 'Query failed', 'error');
-
-      const errorMsg: ChatMessage = {
-        id: generateId(),
-        type: 'assistant',
-        content: `**Error**\n\nFailed to process your query: ${error instanceof Error ? error.message : 'Unknown error'}\n\nIf you see "No LLM configured", please click the **Settings** button in the header and enter an API key (OpenAI, Anthropic, or Google) in the API Keys tab.`,
-        timestamp: new Date(),
-        citations: [],
-        mode: activeMode,
-        isError: true,
-      };
-
-      setMessages((prev: ChatMessage[]) => [...prev, errorMsg]);
-      setAllCitations([]);
+      // The sources of every earlier answer stay exactly as they were: a
+      // failed or cancelled question has none of its own, and wiping the
+      // panel would discard the rest of the conversation's sources.
+      if (controller.signal.aborted) {
+        setMessages((prev: ChatMessage[]) => [...prev, {
+          id: generateId(),
+          type: 'assistant',
+          content: 'Cancelled. If the server had already started on this question it may still finish and save the answer to History.',
+          timestamp: new Date(),
+          citations: [],
+          mode: activeMode,
+        }]);
+      } else {
+        logger.error('RAG query error:', error);
+        addToast(error instanceof Error ? error.message : 'Query failed', 'error');
+        setMessages((prev: ChatMessage[]) => [...prev, {
+          id: generateId(),
+          type: 'assistant',
+          content: `**Error**\n\nFailed to process your query: ${error instanceof Error ? error.message : 'Unknown error'}\n\nIf you see "No LLM configured", please click the **Settings** button in the header and enter an API key (OpenAI, Anthropic, or Google) in the API Keys tab.`,
+          timestamp: new Date(),
+          citations: [],
+          mode: activeMode,
+          isError: true,
+        }]);
+      }
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      setIsProcessing(false);
+      setProcessingStage('');
+      setProcessingStartedAt(null);
     }
+  }, [inputValue, isProcessing, activeMode, mainDocFilter, currentSessionId, addToast, loadChatSessions]);
 
-    setIsProcessing(false);
-    setProcessingStage('');
-  }, [inputValue, isProcessing, activeMode, ragSettings, mainDocFilter, currentSessionId, addToast, loadChatSessions]);
-
-  // Citation status update
-  const handleCitationUpdate = useCallback((citationId: string, status: string, notes: string) => {
-    setAllCitations((prev: Citation[]) => prev.map((c: Citation) => c.id === citationId ? {...c, status: status as Citation['status'], notes, reviewedAt: new Date()} : c));
-    setMessages((prev: ChatMessage[]) => prev.map((msg: ChatMessage) => ({
-      ...msg,
-      citations: msg.citations?.map((c: Citation) => c.id === citationId ? {...c, status: status as Citation['status'], notes} : c)
-    })));
-    setSessionStats((prev: SessionStats) => {
-      const oldStatus = allCitations.find((c: Citation) => c.id === citationId)?.status || 'pending';
-      const prevRecord = prev as unknown as Record<string, number>;
-      return {
-        ...prev,
-        [oldStatus]: Math.max(0, prevRecord[oldStatus] - 1),
-        [status]: prevRecord[status] + 1,
-      };
-    });
-  }, [allCitations]);
+  // Stop waiting for the in-flight answer (or authority-map job).
+  const handleCancel = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   // Reopen a persisted conversation from the History tab.
   const loadSession = useCallback(async (sessionId: string) => {
@@ -483,12 +463,10 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
       const detail = await api.getChatSession(sessionId);
 
       let lastUserQuery = '';
-      let queries = 0;
       const restoredCitations: Citation[] = [];
       const mapped: ChatMessage[] = detail.messages.map((m: ChatSessionMessage) => {
         if (m.role === 'user') {
           lastUserQuery = m.content;
-          queries += 1;
           return {
             id: m.id,
             type: 'user' as const,
@@ -516,13 +494,6 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
       setAllCitations(restoredCitations);
       setSelectedCitation(null);
       setCurrentSessionId(detail.id);
-      setSessionStats({
-        queries,
-        citations: restoredCitations.length,
-        approved: 0,
-        rejected: 0,
-        pending: restoredCitations.length,
-      });
       setActiveMode('research');
     } catch (error: unknown) {
       logger.error('Failed to load chat session:', error);
@@ -562,75 +533,33 @@ export function useResearchState({ addToast, ragSettings, activeMode, setActiveM
   }, [messages, exportingConversation]);
 
   const handleClearSession = useCallback(() => {
+    abortRef.current?.abort();
     setMessages([]);
     setAllCitations([]);
     setCurrentSessionId(null);
-    setSessionStats({ queries: 0, citations: 0, approved: 0, rejected: 0, pending: 0 });
     setInputValue('');
   }, []);
-
-  // Batch citation actions
-  const handleBatchApprove = useCallback(() => {
-    setAllCitations((prev: Citation[]) => prev.map((c: Citation) => c.status === 'pending' ? {...c, status: 'approved' as const, reviewedAt: new Date()} : c));
-    setMessages((prev: ChatMessage[]) => prev.map((msg: ChatMessage) => ({
-      ...msg,
-      citations: msg.citations?.map((c: Citation) => c.status === 'pending' ? {...c, status: 'approved' as const} : c)
-    })));
-    setSessionStats((prev: SessionStats) => ({
-      ...prev,
-      approved: prev.approved + prev.pending,
-      pending: 0,
-    }));
-  }, []);
-
-  const handleBatchReject = useCallback(() => {
-    setAllCitations((prev: Citation[]) => prev.map((c: Citation) => c.status === 'pending' ? {...c, status: 'rejected' as const, reviewedAt: new Date()} : c));
-    setMessages((prev: ChatMessage[]) => prev.map((msg: ChatMessage) => ({
-      ...msg,
-      citations: msg.citations?.map((c: Citation) => c.status === 'pending' ? {...c, status: 'rejected' as const} : c)
-    })));
-    setSessionStats((prev: SessionStats) => ({
-      ...prev,
-      rejected: prev.rejected + prev.pending,
-      pending: 0,
-    }));
-  }, []);
-
-  // Computed
-  const filteredCitations = useMemo(() => {
-    if (citationFilter === 'all') return allCitations;
-    return allCitations.filter((c: Citation) => c.status === citationFilter);
-  }, [allCitations, citationFilter]);
-
-  const citationStats = useMemo(() => ({
-    total: allCitations.length,
-    approved: allCitations.filter((c: Citation) => c.status === 'approved').length,
-    rejected: allCitations.filter((c: Citation) => c.status === 'rejected').length,
-    pending: allCitations.filter((c: Citation) => c.status === 'pending').length,
-  }), [allCitations]);
 
   return {
     messages, setMessages,
     inputValue, setInputValue,
     isProcessing, setIsProcessing,
     processingStage, setProcessingStage,
+    processingStartedAt,
     selectedCitation, setSelectedCitation,
     allCitations, setAllCitations,
     pendingMessageJump, jumpToMessage,
-    citationFilter, setCitationFilter,
     currentSessionId,
     chatSessions, isLoadingSessions, loadChatSessions,
     loadSession, deleteSession,
-    sessionStats, setSessionStats,
     mainDocFilter, setMainDocFilter,
     openDocs, openDocument, closeDocument, docAnnotations,
     hoveredCitationId, setHoveredCitationId,
     pendingDocJump, jumpToDocumentSpan,
     lastMessageRef, inputRef,
-    handleSend, handleCitationUpdate,
-    handleClearSession, handleBatchApprove, handleBatchReject,
+    handleSend, handleCancel,
+    handleClearSession,
     handleExportConversation, exportingConversation,
-    filteredCitations, citationStats,
   };
 }
 

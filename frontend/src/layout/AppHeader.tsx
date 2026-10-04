@@ -9,8 +9,12 @@ export function AppHeader() {
   const { isAuthenticated, user, handleLogin, handleShowSignup, handleLogout } = useAuthStore();
   const { setShowSettings, leftSidebarOpen, setLeftSidebarOpen, rightPanelOpen, setRightPanelOpen } = useUIStore();
 
-  const healthBadgeClass = systemStats.isHealthy ? s.badgeHealthy : s.badgeUnhealthy;
-  const statusDotClass = `${s.statusDotBase} ${systemStats.isHealthy ? s.statusDotHealthy : s.statusDotUnhealthy}`;
+  // Three states: a failed or unanswered health check must never read as green.
+  const health = systemStats.isHealthy === null ? 'unknown' : systemStats.isHealthy ? 'healthy' : 'unhealthy';
+  const healthBadgeClass = { healthy: s.badgeHealthy, unhealthy: s.badgeUnhealthy, unknown: s.badgeUnknown }[health];
+  const healthDotClass = { healthy: s.statusDotHealthy, unhealthy: s.statusDotUnhealthy, unknown: s.statusDotUnknown }[health];
+  const healthLabel = { healthy: 'System healthy', unhealthy: 'System degraded or unreachable', unknown: 'System status not checked yet' }[health];
+  const statusDotClass = `${s.statusDotBase} ${healthDotClass}`;
 
   return (
     <>
@@ -20,16 +24,20 @@ export function AppHeader() {
         <h1 className={s.headerTitle}>Workspace</h1>
         <div className={s.headerBadges}>
           {/* Human-relevant status only — retrieval internals live in Settings. */}
-          <span className={`${s.badge} ${healthBadgeClass}`}>
-            <span className={statusDotClass} aria-label={systemStats.isHealthy ? 'System healthy' : 'System unhealthy'}></span>
+          <span className={`${s.badge} ${healthBadgeClass}`} title={healthLabel}>
+            <span className={statusDotClass} role="img" aria-label={healthLabel}></span>
             {systemStats.totalDocuments > 1000 ? (systemStats.totalDocuments / 1000).toFixed(1) + 'k' : systemStats.totalDocuments} documents indexed
           </span>
         </div>
       </div>
       <div className={s.headerRight}>
-        <button className={s.headerBtn} onClick={() => setShowSettings(true)}>
-          <Icon name="Settings" size={18} /> Settings
-        </button>
+        {/* Settings is gated behind sign-in as a whole — don't offer a button
+            that would open nothing. */}
+        {isAuthenticated && (
+          <button className={s.headerBtn} onClick={() => setShowSettings(true)}>
+            <Icon name="Settings" size={18} /> Settings
+          </button>
+        )}
         {isAuthenticated && user ? (
           <div className={s.userMenu}>
             <div className={s.userAvatar}>{user.email?.[0]?.toUpperCase() || 'U'}</div>

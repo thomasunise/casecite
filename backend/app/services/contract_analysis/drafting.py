@@ -14,6 +14,7 @@ import io
 import json
 import logging
 
+from app.services.case_law_research import redact_unverified_case_references
 from app.services.contract_analysis.long_drafting import context_window_tokens
 from app.services.llm_clients import chat_model, openai_chat
 from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
@@ -66,7 +67,12 @@ async def draft_document(
     that existing draft and the FULL revised document comes back — this is how
     the drafting workspace iterates ("make the term 3 years", "add arbitration").
 
-    Returns {"title": str, "text": str}.
+    Returns {"title": str, "text": str, "case_law_removed": [str]}.
+
+    The draft is model output, so the case-law guard applies: a case name or
+    reporter citation survives only if it appears in the instructions, the
+    reference document or the draft being revised. Anything else is replaced
+    with a visible marker and listed in ``case_law_removed``.
 
     Raises ValueError when ``client`` is None; any other failure raises
     RuntimeError with a clean message (the caller maps it to HTTP).
@@ -122,7 +128,12 @@ async def draft_document(
 
     if not text:
         raise RuntimeError("Document drafting failed: the model returned an empty draft")
-    return {"title": title, "text": text}
+    text, removed = redact_unverified_case_references(
+        text, sources=[instructions, reference_text, revision_of], known_parties=True
+    )
+    if removed:
+        logger.info("Drafting removed %d unverified case reference(s)", len(removed))
+    return {"title": title, "text": text, "case_law_removed": removed}
 
 
 def render_draft_docx(title: str, text: str) -> bytes:

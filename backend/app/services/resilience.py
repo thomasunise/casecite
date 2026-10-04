@@ -115,13 +115,25 @@ class CircuitBreakerOpen(Exception):
     pass
 
 
-# Global circuit breakers registry
+# Global circuit breakers registry. Breakers may be scoped per credential
+# (e.g. "embeddings:<key fingerprint>") so one user's failing key cannot open
+# the circuit for everyone; the registry is bounded so those per-credential
+# entries cannot grow without limit.
+_MAX_CIRCUIT_BREAKERS = 1024
 _circuit_breakers: dict[str, CircuitBreaker] = {}
 
 
 def get_circuit_breaker(name: str, **kwargs) -> CircuitBreaker:
     """Get or create a circuit breaker by name."""
     if name not in _circuit_breakers:
+        if len(_circuit_breakers) >= _MAX_CIRCUIT_BREAKERS:
+            # Evict the oldest healthy breaker (insertion order); if every
+            # breaker is tripped, evict the oldest outright.
+            victim = next(
+                (n for n, cb in _circuit_breakers.items() if cb.state == CircuitState.CLOSED),
+                next(iter(_circuit_breakers)),
+            )
+            del _circuit_breakers[victim]
         _circuit_breakers[name] = CircuitBreaker(name, **kwargs)
     return _circuit_breakers[name]
 
@@ -137,6 +149,7 @@ async def retry_with_backoff(
     retryable_exceptions: tuple = (Exception,),
     circuit_breaker_name: str | None = None,
     fallback: Callable[..., T] | None = None,
+    is_retryable: Callable[[Exception], bool] | None = None,
     **kwargs,
 ) -> T:
     """
@@ -152,6 +165,11 @@ async def retry_with_backoff(
         retryable_exceptions: Exceptions that trigger retry
         circuit_breaker_name: Name of circuit breaker to use
         fallback: Fallback function if all retries fail
+        is_retryable: Optional predicate. When it returns False for an
+            exception (e.g. a rejected API key or a configuration error) the
+            exception is raised immediately: it is not retried and does not
+            count against the circuit breaker, because the upstream service is
+            healthy — the request itself is wrong.
 
     Returns:
         Result of func or fallback
@@ -186,6 +204,9 @@ async def retry_with_backoff(
             return result
 
         except retryable_exceptions as e:
+            if is_retryable is not None and not is_retryable(e):
+                raise
+
             last_exception = e
 
             if circuit_breaker:

@@ -1,6 +1,8 @@
 # CaseCite Platform — Development Conventions
 
-These rules are mandatory. Follow them exactly when writing or modifying code.
+These are the conventions the codebase follows. New code should follow them;
+where existing code deviates (the notes below say where), move it toward the
+convention when you touch it rather than copying the deviation.
 
 ---
 
@@ -15,8 +17,8 @@ src/
     shared/       # Reusable components (Icon, PdfDocumentViewer, etc.)
     modals/       # Modal dialogs (CitationModal, AuthModals, etc.)
     index.ts      # Barrel re-exports — every shared/modal component MUST be exported here
-  contexts/       # React contexts (AppContext)
-  hooks/          # Custom hooks — one per feature (useXxxState.ts)
+  contexts/       # React contexts (AppContext, ResearchContext)
+  hooks/          # App-level hooks (effects, UI state, shortcuts) + useResearchState
   layout/         # App shell components (AppHeader, LeftSidebar, RightPanel, etc.)
   stores/         # Zustand stores (uiStore, authStore, etc.)
   views/          # Page-level view components (one per tab/route)
@@ -25,10 +27,11 @@ src/
 
 ### View Files (`views/XxxView.tsx`)
 
-- **One exported function per file**: `function XxxView()` — no inline sub-components.
-- Views are **pure rendering**. They destructure state from stores/hooks and render JSX.
-- **No business logic in views**: no `useEffect` for data fetching, no `useCallback` for handlers, no `useMemo` for derived data. All of that belongs in the corresponding Zustand store or custom hook.
+- **One view component per file**: `function XxxView()` — no inline sub-components.
+- Views render. They destructure state from stores/hooks and return JSX.
+- **Business logic belongs in the store**: data fetching, handlers and derived data live in the corresponding Zustand store (or `useResearchState`). A view's own `useEffect` is for lifecycle wiring only — calling the store's `init()`, reacting to a route parameter, focus and scroll management.
 - Views may have minimal local UI state (e.g., a dropdown open/close ref) but nothing else.
+- Known deviation: `ContractsView`, `DraftingView` and `ResearchView` are larger than this rule intends and still hold some handler wiring. Extract into the store or a shared component when changing them.
 - Static constants (like option arrays) may live at module scope. Components and rendering logic must not.
 - If a view needs a helper component, extract it to `components/shared/` and import it.
 - CSS: one `XxxView.module.css` per view, imported as `s`.
@@ -46,20 +49,20 @@ const OPTIONS = [ ... ] as const;
 
 function XxxView() {
   const { stateA, stateB, handlerA, computedValue } = useSomeStore();
-  // local UI refs only — no business logic, no useEffect, no useMemo
+  // local UI refs and lifecycle wiring only — no business logic
   // return JSX
 }
 
-export { XxxView };
+// Views are the one place a default export is used: routes load them with
+// React.lazy(() => import('../views/XxxView')), which needs one.
 export default XxxView;
 ```
 
-### State Hooks (`hooks/useXxxState.ts`)
+### Hooks (`hooks/`)
 
-- One hook per feature/view. All state, refs, and handler functions live here.
-- Hooks are called at the App level and spread into AppContext to preserve state across navigation.
+- Feature state lives in Zustand stores (next section), not in per-feature hooks. `hooks/` holds the app-level hooks — `useAppEffects` (mount-time bootstrap), `useAppUIState`, `useKeyboardShortcuts` — and `useResearchState`, the one feature whose state is a hook, called at the App level and provided through context so it survives navigation.
+- Do not add a new `useXxxState` hook for a feature; add a store.
 - Hooks import from `../api` for backend calls. They never import view components.
-- Naming: `useXxxState` where `Xxx` matches the feature (Contract, Discovery, Drafting, etc.).
 
 ### Shared Components (`components/shared/`)
 
@@ -79,7 +82,7 @@ export default XxxView;
 
 ### API Layer (`api/`)
 
-- One file per domain (documents.ts, chat.ts, pleadings.ts, etc.).
+- One file per domain (documents.ts, chat.ts, contracts.ts, etc.).
 - All exports go through `api/index.ts` barrel.
 - **Never use raw `fetch()`** — always go through `api.request()` or `api.authFetch()`.
 - **Never use raw `api.request('/path')` in components** — create a typed domain method in the appropriate `api/*.ts` file and call that instead. Components and stores should only call named methods like `api.getKeyStatus()`, never `api.request('/user/keys/status')`.
@@ -112,9 +115,10 @@ backend/app/
 - **Route ordering matters**: literal paths MUST be defined BEFORE parameterized catch-alls.
   - Correct: `@router.get("/stats")` then `@router.get("/{id}")` then `@router.delete("/all")` then `@router.delete("/{id}")`
   - Wrong: `@router.delete("/{id}")` before `@router.delete("/all")` (the literal "/all" becomes unreachable)
-- Use `Depends(get_current_user)` for auth and `require_roles(UserRole.ADMIN)` for admin-only endpoints. (This is a self-hosted product — there is no subscription/billing tier.)
+- Use `Depends(get_current_user)` for auth and `require_permission("<area>.<action>")` (from `services/permissions.py`) for anything gated by role — e.g. `require_permission("admin.users")` for user administration. Do not check role names inline. (This is a self-hosted product — there is no subscription/billing tier.)
+- Any endpoint that takes an id must resolve ownership server-side (owner or matter member) and answer 404, not 403, for someone else's object.
 - Validate file uploads with magic bytes, not just extensions.
-- Catch specific exceptions — never bare `except:`.
+- Catch specific exceptions — never bare `except:`. Client libraries raise their own base classes (`httpx.HTTPError`, `openai.APIError`, `anthropic.APIError`, `chromadb.errors.ChromaError`); a tuple of built-ins does not catch them.
 
 ### Service Rules (`services/`)
 

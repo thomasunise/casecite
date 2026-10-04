@@ -1,28 +1,104 @@
 """
-Test configuration and fixtures for CaseCite RAG Platform.
+Test configuration and fixtures for CaseCite.
+
+Everything the suite needs from the environment is set HERE, before the app is
+imported, so `python -m pytest` behaves the same on a laptop and in CI:
+
+- All on-disk state (uploads, vector store, SQLite DB, audit logs, sessions,
+  revoked tokens, key stores — every one derives from UPLOAD_DIR's parent) goes
+  to a throwaway per-session directory. The suite never touches backend/data.
+- Provider keys are dummies, so a developer's real key in .env is never used
+  (and never billed) by a test run.
+- Outbound network is blocked: resolving any public hostname fails like an
+  offline machine. Set CASECITE_TEST_ALLOW_NETWORK=1 to lift the block.
 """
 
+import atexit
 import datetime as _dt
-import sys
-
-# Shim datetime.UTC for Python < 3.11 (project targets 3.11, but test env may be 3.10)
-if sys.version_info < (3, 11) and not hasattr(_dt, "UTC"):
-    _dt.UTC = _dt.timezone.utc  # noqa: UP017
-
+import ipaddress
 import os
+import shutil
+import socket
+import tempfile
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-# Set test environment before importing app
+# ---- Environment (must run before anything imports app.config) --------------
+
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
 os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
 os.environ["DEBUG"] = "true"
 # CSRF middleware is now ALWAYS registered; skipping validation requires the
 # explicit debug+csrf_disabled pair (see app/middleware/csrf.py).
 os.environ["CSRF_DISABLED"] = "true"
+
+# Isolated data directory. setdefault: a caller that points these somewhere
+# explicitly (CI's Postgres job, a debugging session) is respected; the
+# defaults in app/config.py (./data/...) are never used by a test run.
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix="casecite-tests-")
+atexit.register(shutil.rmtree, _TEST_DATA_DIR, ignore_errors=True)
+os.environ.setdefault("UPLOAD_DIR", os.path.join(_TEST_DATA_DIR, "uploads"))
+os.environ.setdefault("CHROMA_PERSIST_DIR", os.path.join(_TEST_DATA_DIR, "chroma"))
+os.environ.setdefault(
+    "DATABASE_URL",
+    "sqlite+aiosqlite:///" + os.path.join(_TEST_DATA_DIR, "casecite.db").replace(os.sep, "/"),
+)
+
+# Dummy provider keys. Environment variables take precedence over .env, so a
+# real key in the developer's .env cannot leak into a test run.
+os.environ["OPENAI_API_KEY"] = "sk-test-dummy-key-not-real"
+for _key in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "VOYAGE_API_KEY", "COHERE_API_KEY"):
+    os.environ[_key] = ""
+
+# ---- Network guard -----------------------------------------------------------
+
+_real_getaddrinfo = socket.getaddrinfo
+
+
+def _is_local_host(host) -> bool:
+    if host is None:
+        return True
+    if isinstance(host, bytes):
+        host = host.decode("ascii", "ignore")
+    host = host.strip("[]")
+    try:
+        ipaddress.ip_address(host)
+        return True  # IP literals (loopback, CI service containers) need no DNS
+    except ValueError:
+        pass
+    # localhost, TestClient's fake hosts, and dotless names (compose services).
+    return host == "" or "." not in host or host.endswith(".localhost")
+
+
+def _guarded_getaddrinfo(host, *args, **kwargs):
+    if _is_local_host(host):
+        return _real_getaddrinfo(host, *args, **kwargs)
+    # Same failure a machine with no network would produce, so code under test
+    # exercises its real "provider unreachable" path instead of calling out.
+    raise socket.gaierror(socket.EAI_NONAME, f"network access is blocked in tests: {host}")
+
+
+if os.environ.get("CASECITE_TEST_ALLOW_NETWORK") != "1":
+    socket.getaddrinfo = _guarded_getaddrinfo
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _seed_without_embeddings():
+    """App startup seeds the clause taxonomy and, when OPENAI_API_KEY is set,
+    embeds it — a provider call on every TestClient startup. Seed the rows but
+    skip the embedding step for the whole session."""
+    from app.services.clause_intel import seeder
+
+    real_seed = seeder.seed_clause_intelligence
+
+    async def _seed(session, embed_fn=None, embedding_model=None):
+        return await real_seed(session, embed_fn=None, embedding_model=embedding_model)
+
+    with patch.object(seeder, "seed_clause_intelligence", _seed):
+        yield
 
 
 @pytest.fixture(scope="session")
@@ -121,113 +197,6 @@ def mock_openai():
 
 
 @pytest.fixture
-def mock_vector_db():
-    """Mock vector database for testing."""
-    with patch("app.services.vectordb.get_vector_db") as mock:
-        mock_db = MagicMock()
-        mock_db.get_stats.return_value = {
-            "total_chunks": 100,
-            "stored_embedding_dimensions": 1536,
-        }
-        mock_db.search.return_value = []
-        mock.return_value = mock_db
-        yield mock_db
-
-
-@pytest.fixture
-def sample_document():
-    """Create a sample document for testing."""
-    from datetime import datetime
-
-    return {
-        "id": "doc-123",
-        "filename": "test_contract.pdf",
-        "content_type": "application/pdf",
-        "size": 1024,
-        "source": "local",
-        "status": "indexed",
-        "chunk_count": 5,
-        "folder_path": "/Clients/Smith/",
-        "created_at": datetime.now(_dt.UTC).isoformat(),
-    }
-
-
-@pytest.fixture
-def sample_chunks():
-    """Create sample document chunks for testing."""
-    return [
-        {
-            "text": "This Agreement is entered into as of January 1, 2024.",
-            "chunk_index": 0,
-            "token_count": 12,
-            "metadata": {"document_id": "doc-123", "source": "test_contract.pdf"},
-        },
-        {
-            "text": "The parties agree to the following terms and conditions.",
-            "chunk_index": 1,
-            "token_count": 10,
-            "metadata": {"document_id": "doc-123", "source": "test_contract.pdf"},
-        },
-    ]
-
-
-@pytest.fixture
-def sample_case_law():
-    """Create sample case law results for testing."""
-    return [
-        {
-            "id": 12345,
-            "case_name": "Smith v. Jones",
-            "citation": ["123 F.3d 456 (9th Cir. 2023)"],
-            "court": "ca9",
-            "date_filed": "2023-06-15",
-            "snippet": "The court held that the plaintiff must demonstrate...",
-            "url": "https://www.courtlistener.com/opinion/12345/smith-v-jones/",
-        }
-    ]
-
-
-@pytest.fixture(scope="session")
-def test_data_dir(tmp_path_factory):
-    """Create a temporary data directory for tests."""
-    return tmp_path_factory.mktemp("test_data")
-
-
-@pytest.fixture
-def mock_courtlistener():
-    """Mock CourtListener API for testing."""
-    with patch("httpx.AsyncClient") as mock:
-        mock_client = MagicMock()
-        mock.return_value.__aenter__.return_value = mock_client
-
-        # Mock search response
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "count": 1,
-            "results": [{"id": 123, "case_name": "Test v. Case", "citation": ["123 F.3d 456"]}],
-        }
-        mock_client.get.return_value = mock_response
-
-        yield mock_client
-
-
-@pytest.fixture
-def fingerprinting_service(tmp_path):
-    """Create an isolated FingerprintingService with a temp SQLite database."""
-    from app.services.fingerprinting import FingerprintingService
-
-    service = FingerprintingService.__new__(FingerprintingService)
-    service.db_path = tmp_path / "fingerprints.db"
-    service.similarity_threshold = 0.85
-    service.ip_velocity_limit = 3
-    service.asn_velocity_limit = 10
-    service.fingerprint_velocity_hours = 24
-    service._init_db()
-    return service
-
-
-@pytest.fixture
 def audit_service_isolated(tmp_path):
     """Create an isolated AuditService with a temp log directory."""
     from app.services.audit import AuditLog, AuditService
@@ -281,6 +250,39 @@ def chroma_db(tmp_path):
     db.search = ChromaDB.search.__get__(db, TestChromaDB)
     db.delete = ChromaDB.delete.__get__(db, TestChromaDB)
     db.delete_by_document = ChromaDB.delete_by_document.__get__(db, TestChromaDB)
-    db.clear_all = ChromaDB.clear_all.__get__(db, TestChromaDB)
+    db.get_document_chunks = ChromaDB.get_document_chunks.__get__(db, TestChromaDB)
     db.get_stats = ChromaDB.get_stats.__get__(db, TestChromaDB)
     yield db
+
+
+@pytest.fixture
+def no_rate_limit():
+    """Bypass the per-IP rate limiter.
+
+    Every TestClient request comes from the same "testclient" IP, so under the
+    full suite a bucket can already be spent and a request 429s before reaching
+    the logic under test. Opt in with ``pytest.mark.usefixtures``.
+    """
+    with patch(
+        "app.middleware.security.RateLimiter.is_allowed",
+        return_value=(True, {"limit": 100, "remaining": 99}),
+    ):
+        yield
+
+
+@pytest.fixture
+def audit_events():
+    """Capture audit events emitted through audit_service.log_event.
+
+    Yields a list of the keyword arguments of every call, so a test can assert
+    that an action was audited without touching the audit log files.
+    """
+    from app.services.audit import audit_service
+
+    events: list[dict] = []
+
+    async def _capture(**kwargs):
+        events.append(kwargs)
+
+    with patch.object(audit_service, "log_event", _capture):
+        yield events

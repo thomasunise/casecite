@@ -36,7 +36,7 @@ function LoginModal() {
               {loginError}
             </div>
           )}
-          <form onSubmit={e => { e.preventDefault(); handleLoginSubmit(); }} className={s.formLayout}>
+          <form id={`${id}-form`} onSubmit={e => { e.preventDefault(); handleLoginSubmit(); }} className={s.formLayout}>
             <div>
               <label htmlFor={`${id}-email`} className={s.formLabel}>Email</label>
               <input id={`${id}-email`} type="email" className={s.modalInput} value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
@@ -57,14 +57,15 @@ function LoginModal() {
           </form>
         </div>
         <div className={s.modalFooter}>
-          <button className={s.btnSecondary} onClick={() => setShowLoginModal(false)}>Cancel</button>
-          <button className={s.btnPrimary} onClick={handleLoginSubmit} disabled={loginLoading}>
+          <button type="button" className={s.btnSecondary} onClick={() => setShowLoginModal(false)}>Cancel</button>
+          {/* A real submit button tied to the form, so Enter in either field signs in. */}
+          <button type="submit" form={`${id}-form`} className={s.btnPrimary} disabled={loginLoading}>
             {loginLoading ? 'Signing in...' : 'Sign In'}
           </button>
         </div>
         <div className={s.bottomBar}>
           Don't have an account?{' '}
-          <button onClick={handleShowSignup} className={s.switchLink}>
+          <button type="button" onClick={handleShowSignup} className={s.switchLink}>
             Register
           </button>
         </div>

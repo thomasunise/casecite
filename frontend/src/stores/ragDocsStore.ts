@@ -170,7 +170,7 @@ export const useRagDocsStore = create<RagDocsState>((set, get) => ({
     };
     useUIStore.getState().showConfirm({
       title: 'Delete Document',
-      message: `Delete "${doc.filename}"? This will remove it from the vector store.`,
+      message: `Delete "${doc.filename}"? The file, its indexed text, and any contract analyses or citation maps built from it are permanently deleted.`,
       type: 'danger',
       confirmText: 'Delete',
       onConfirm: doDelete,

@@ -28,7 +28,6 @@ describe('api/documents', () => {
     expect(typeof (api as any).getDocumentTree).toBe('function');
     expect(typeof (api as any).getDocumentContent).toBe('function');
     expect(typeof (api as any).deleteDocument).toBe('function');
-    expect(typeof (api as any).reindexDocuments).toBe('function');
   });
 
   it('uploadDocument posts FormData to /documents via api.request', async () => {
@@ -81,11 +80,5 @@ describe('api/documents', () => {
     (api.request as any).mockResolvedValue({ message: 'deleted' });
     await (api as any).deleteDocument('doc1');
     expect(api.request).toHaveBeenCalledWith('/documents/doc1', { method: 'DELETE' });
-  });
-
-  it('reindexDocuments calls POST /settings/reindex', async () => {
-    (api.request as any).mockResolvedValue({ message: 'reindexing' });
-    await (api as any).reindexDocuments();
-    expect(api.request).toHaveBeenCalledWith('/settings/reindex', { method: 'POST' });
   });
 });

@@ -135,3 +135,28 @@
   align-self: center;
   color: var(--gray-400);
 }
+
+/* What the mapper's bounds left out — stated by the server, per file. */
+.coverage {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--gray-300);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gray-600);
+}
+
+.coverageIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--amber-700);
+}
+
+.coverageList {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}

@@ -307,3 +307,121 @@ class TestPickersRouter:
             data = resp.json()
             assert data["imported"] == 0
             assert data["failed"] == 0
+
+
+class TestPickerImportHardening:
+    """BYOK keys reach the indexer, ids are URL-encoded, failures are counted."""
+
+    def _import(self, client, auth_headers, path, files, upload_result=None, headers=None):
+        from types import SimpleNamespace
+
+        from app.models.schemas import DocumentStatus
+
+        result = upload_result or SimpleNamespace(
+            id="doc-1", status=DocumentStatus.INDEXED, metadata={}
+        )
+        with (
+            patch("app.routers.pickers.safe_download", new_callable=AsyncMock) as download,
+            patch(
+                "app.routers.pickers.document_service.upload_and_index",
+                new=AsyncMock(return_value=result),
+            ) as upload,
+            patch("app.routers.pickers.audit_service.log_event", new_callable=AsyncMock) as audit,
+        ):
+            download.return_value = b"%PDF-1.4 fake pdf content"
+            resp = client.post(path, json=files, headers={**auth_headers, **(headers or {})})
+        return resp, download, upload, audit
+
+    def test_user_keys_are_passed_to_the_indexer(self, client, auth_headers):
+        """Without this a BYOK-only instance cannot embed picker imports."""
+        resp, _, upload, _ = self._import(
+            client,
+            auth_headers,
+            "/api/v1/pickers/box/import",
+            [{"id": "9", "name": "contract.pdf", "accessToken": "box-token"}],
+            headers={"X-OpenAI-Key": "sk-test-key-0123456789"},
+        )
+        assert resp.status_code == 200
+        user_keys = upload.call_args.kwargs["user_keys"]
+        assert user_keys.openai == "sk-test-key-0123456789"
+
+    def test_box_file_id_is_url_encoded(self, client, auth_headers):
+        resp, download, _, _ = self._import(
+            client,
+            auth_headers,
+            "/api/v1/pickers/box/import",
+            [{"id": "1/../../users/me?x=1", "name": "contract.pdf", "accessToken": "t"}],
+        )
+        assert resp.status_code == 200
+        url = download.call_args.args[0]
+        assert url == "https://api.box.com/2.0/files/1%2F..%2F..%2Fusers%2Fme%3Fx%3D1/content"
+
+    def test_google_file_id_is_url_encoded(self, client, auth_headers):
+        resp, download, _, _ = self._import(
+            client,
+            auth_headers,
+            "/api/v1/pickers/google/import",
+            [
+                {
+                    "id": "abc/../about?fields=*",
+                    "name": "document.pdf",
+                    "mimeType": "application/pdf",
+                    "oauthToken": "ya29.test-token",
+                }
+            ],
+        )
+        assert resp.status_code == 200
+        url = download.call_args.args[0]
+        assert url.startswith(
+            "https://www.googleapis.com/drive/v3/files/abc%2F..%2Fabout%3Ffields%3D%2A?"
+        )
+
+    def test_onedrive_ids_are_url_encoded(self, client, auth_headers):
+        resp, download, _, _ = self._import(
+            client,
+            auth_headers,
+            "/api/v1/pickers/microsoft/import",
+            [
+                {
+                    "id": "01ITEM/../x",
+                    "name": "brief.pdf",
+                    "accessToken": "eyJ0...",
+                    "driveId": "b!drive/..",
+                }
+            ],
+        )
+        assert resp.status_code == 200
+        url = download.call_args.args[0]
+        assert url == (
+            "https://graph.microsoft.com/v1.0/drives/b!drive%2F../items/01ITEM%2F..%2Fx/content"
+        )
+
+    def test_unindexable_document_counts_as_failed(self, client, auth_headers):
+        from types import SimpleNamespace
+
+        from app.models.schemas import DocumentStatus
+
+        failed_doc = SimpleNamespace(
+            id="doc-1", status=DocumentStatus.FAILED, metadata={"error": "No embedding key"}
+        )
+        resp, _, _, audit = self._import(
+            client,
+            auth_headers,
+            "/api/v1/pickers/dropbox/import",
+            [{"name": "filing.pdf", "link": "https://dl.dropboxusercontent.com/1/filing.pdf"}],
+            upload_result=failed_doc,
+        )
+        data = resp.json()
+        assert data["imported"] == 0
+        assert data["failed"] == 1
+        assert data["errors"] == ["filing.pdf: No embedding key"]
+        assert audit.call_args.kwargs["details"]["document_ids"] == []
+
+    def test_audit_records_imported_document_ids(self, client, auth_headers):
+        _, _, _, audit = self._import(
+            client,
+            auth_headers,
+            "/api/v1/pickers/box/import",
+            [{"id": "9", "name": "contract.pdf", "accessToken": "box-token"}],
+        )
+        assert audit.call_args.kwargs["details"]["document_ids"] == ["doc-1"]

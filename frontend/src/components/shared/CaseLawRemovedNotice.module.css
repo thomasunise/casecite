@@ -1,0 +1,25 @@
+/* Notice that unverifiable case references were taken out of a generated
+   artifact. Quiet by default; callers may pass their own container class. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--gray-300);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gray-600);
+}
+
+.icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--amber-700);
+}
+
+.list {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}

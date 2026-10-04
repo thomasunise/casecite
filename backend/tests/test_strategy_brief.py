@@ -101,6 +101,8 @@ class TestBuildPassages:
         passages = build_passages([("a", "a.pdf")], grouped)
 
         assert len(passages[0]["snippet"]) == SNIPPET_MAX_CHARS
+        # The display snippet is short; the synthesis still gets the whole chunk.
+        assert len(passages[0]["text"]) == 1000
 
     def test_skips_empty_chunks(self):
         grouped = {"a": [_chunk("a", "   ")]}
@@ -316,11 +318,15 @@ class TestGenerateBrief:
         result = await self._run(patches)
 
         assert result["question"] == "Can we enforce the indemnity clause?"
-        assert result["scope"] == {
-            "folder_path": None,
-            "documents_considered": 2,
-            "documents_total": 2,
-        }
+        scope = result["scope"]
+        assert scope["folder_path"] is None
+        assert scope["documents_considered"] == 2
+        assert scope["documents_total"] == 2
+        # The payload says how much was actually read — passages, not whole files.
+        assert scope["passages_read"] == 2
+        assert scope["truncated"] is False
+        assert "not read in full" in scope["coverage_note"]
+        assert result["case_law_removed"] == []
         assert result["position"] == "The client is well positioned."
         assert result["strengths"][0]["citation_ids"] == ["d0"]
         # "d99" is an unknown ref and must be dropped.
@@ -409,14 +415,13 @@ class TestGenerateBrief:
             if "PROPOSITION TO SUPPORT" in c.kwargs["messages"][0]["content"]
         ]
         assert judge_prompts
-        assert any(
-            self.CRAFT_PAYLOAD["targets"][0]["proposition"] in p for p in judge_prompts
-        )
+        assert any(self.CRAFT_PAYLOAD["targets"][0]["proposition"] in p for p in judge_prompts)
         # The brief reports what the case-law stage did.
         assert result["case_law"] == {
             "requested": True,
             "points_searched": 2,
             "opinions_read": 4,
+            "partially_read": 0,
             "attached": 4,
             "unreadable": 0,
             "unsupportive": 0,
@@ -582,6 +587,7 @@ class TestGenerateBrief:
             "requested": True,
             "points_searched": 2,
             "opinions_read": 0,
+            "partially_read": 0,
             "attached": 0,
             "unreadable": 0,
             "unsupportive": 0,
@@ -620,3 +626,91 @@ class TestGenerateBrief:
         patches[1] = patch("app.services.strategy.get_vector_db", return_value=None)
         with pytest.raises(StrategyServiceUnavailable):
             await self._run(patches)
+
+
+class TestSynthesisReadsWholePassages:
+    """The brief used to be synthesised from 400-character openings."""
+
+    @pytest.mark.asyncio
+    async def test_prompt_carries_the_full_passage_not_the_snippet(self):
+        tail = "THE-CAP-IS-IN-THE-LAST-SENTENCE"
+        long_passage = ("Indemnity recital. " * 60) + tail
+        assert len(long_passage) > SNIPPET_MAX_CHARS
+        llm_client = _mock_llm_client(TestGenerateBrief.LLM_PAYLOAD)
+        helper = TestGenerateBrief()
+        patches = helper._patches(
+            doc_ids=["a", "b"],
+            search_results=[_chunk("a", long_passage, 0.9), _chunk("b", "beta passage", 0.5)],
+            llm_client=llm_client,
+        )
+        result = await helper._run(patches)
+
+        prompt = llm_client.chat.completions.create.await_args_list[0].kwargs["messages"][0][
+            "content"
+        ]
+        assert tail in prompt
+        # Citations still show the short display snippet.
+        alpha = next(c for c in result["citations"] if c["document_id"] == "a")
+        assert len(alpha["passage"]) == SNIPPET_MAX_CHARS
+
+    @pytest.mark.asyncio
+    async def test_scope_reports_documents_left_out(self):
+        from app.services.strategy import MAX_DOCUMENTS
+
+        doc_ids = [f"d{i}" for i in range(MAX_DOCUMENTS + 3)]
+        helper = TestGenerateBrief()
+        patches = helper._patches(
+            doc_ids=doc_ids,
+            search_results=[_chunk(doc_id, f"passage {doc_id}", 0.5) for doc_id in doc_ids],
+        )
+        result = await helper._run(patches)
+
+        assert result["scope"]["documents_considered"] == MAX_DOCUMENTS
+        assert result["scope"]["truncated"] is True
+        assert "3 more in scope were not read" in result["scope"]["coverage_note"]
+
+
+class TestBriefCaseLawGuard:
+    """Synthesis prose is model output: a case it names from its own weights goes."""
+
+    @pytest.mark.asyncio
+    async def test_invented_case_is_removed_and_reported(self):
+        payload = {
+            "position": "Strong under Hadley v. Baxendale, 9 Exch. 341.",
+            "strengths": [{"point": "See Fakename v. Nowhere, 123 F.3d 456.", "refs": ["d0"]}],
+            "weaknesses": [{"point": "Notice was late.", "refs": ["d1"]}],
+            "next_steps": [{"step": "Gather the notices.", "refs": ["d1"]}],
+        }
+        helper = TestGenerateBrief()
+        patches = helper._patches(
+            doc_ids=["a", "b"],
+            search_results=[_chunk("a", "alpha passage", 0.9), _chunk("b", "beta passage", 0.5)],
+            llm_client=_mock_llm_client(payload),
+        )
+        result = await helper._run(patches)
+
+        assert "Fakename" not in result["strengths"][0]["point"]
+        assert "unverified case-law reference removed" in result["strengths"][0]["point"]
+        assert "Hadley" not in result["position"]
+        assert any("Fakename" in r for r in result["case_law_removed"])
+        # Ordinary prose is untouched.
+        assert result["weaknesses"][0]["point"] == "Notice was late."
+
+    @pytest.mark.asyncio
+    async def test_case_quoted_in_the_clients_own_documents_is_kept(self):
+        payload = {
+            "position": "The motion relies on Smith v. Jones.",
+            "strengths": [{"point": "Their brief cites Smith v. Jones.", "refs": ["d0"]}],
+            "weaknesses": [],
+            "next_steps": [],
+        }
+        helper = TestGenerateBrief()
+        patches = helper._patches(
+            doc_ids=["a"],
+            search_results=[_chunk("a", "As held in Smith v. Jones, notice is required.", 0.9)],
+            llm_client=_mock_llm_client(payload),
+        )
+        result = await helper._run(patches)
+
+        assert result["position"] == "The motion relies on Smith v. Jones."
+        assert result["case_law_removed"] == []

@@ -18,12 +18,26 @@ const COMPOSER_HINTS = [
 ] as const;
 const HINT_ROTATE_MS = 3500;
 
+/** Real elapsed time for the in-flight request — the only progress we know. */
+function ElapsedTime({ since }: { since: number | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (since == null) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [since]);
+  if (since == null) return null;
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  const label = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  return <span className={s.elapsed} aria-hidden="true">{label}</span>;
+}
+
 function ResearchView() {
   const {
-    messages, isProcessing, processingStage,
+    messages, isProcessing, processingStage, processingStartedAt,
     lastMessageRef, inputRef,
     inputValue, setInputValue,
-    handleSend, handleClearSession, handleExportConversation, exportingConversation,
+    handleSend, handleCancel, handleClearSession, handleExportConversation, exportingConversation,
     setSelectedCitation,
     mainDocFilter, setMainDocFilter,
     openDocs, openDocument, closeDocument, docAnnotations,
@@ -278,6 +292,10 @@ function ResearchView() {
                   <div className={s.processingContent}>
                     <Icon name="Loader2" size={16} className={s.spinnerIcon} />
                     <span>{processingStage}</span>
+                    <ElapsedTime since={processingStartedAt} />
+                    <button type="button" className={s.cancelBtn} onClick={handleCancel}>
+                      Cancel
+                    </button>
                   </div>
                   <div className={s.progressBar}>
                     <div className={s.progressFill} />

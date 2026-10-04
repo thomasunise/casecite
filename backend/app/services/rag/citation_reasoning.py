@@ -18,6 +18,9 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from app.services.llm_clients import make_openai, openai_chat, utility_model
+from app.services.provider_policy import enforce_openai_client
+from app.services.rag.generation import chosen_provider_text, strip_json_fences
+from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
 
 if TYPE_CHECKING:
     from app.models.schemas import Citation
@@ -57,8 +60,12 @@ def build_citation_refs(citations: list[Citation]) -> list[dict[str, str]]:
 
 def build_reasoning_prompt(query: str, answer: str, refs: list[dict[str, str]]) -> str:
     """Build the single utility-LLM prompt covering ALL citations at once."""
+    # Snippets are passages from uploaded documents and court opinions —
+    # third-party text, so each is delimited as data, never instructions.
     source_lines = "\n".join(
-        f'[{r["ref"]}] ({r["type"]}) {r["source"]}: "{r["snippet"]}"' for r in refs
+        f"[{r['ref']}] ({r['type']}) {r['source']}:\n"
+        + untrusted_block(f"{r['ref']}: {r['source']}", r["snippet"])
+        for r in refs
     )
     return (
         "You are writing the audit trail for an AI legal research answer. A lawyer will "
@@ -87,6 +94,7 @@ def build_reasoning_prompt(query: str, answer: str, refs: list[dict[str, str]]) 
         "Return STRICT JSON: "
         '{"citations":[{"ref":"c0","reasoning":[{"type":"...","description":"...",'
         '"evidence":"..."}],"application":"..."}]}\n\n'
+        f"{UNTRUSTED_CONTENT_RULE}\n\n"
         f"QUESTION:\n{query}\n\n"
         f"ANSWER:\n{answer[:ANSWER_TEXT_LIMIT]}\n\n"
         f"CITED SOURCES:\n{source_lines}"
@@ -162,8 +170,12 @@ async def enrich_citations_with_reasoning(
     query: str,
     answer: str,
     user_keys: UserAPIKeys | None = None,
+    model: str | None = None,
 ) -> None:
     """One utility-LLM pass attaching auditable reasoning to every citation.
+
+    ``model`` is the user's chosen chat model; the pass runs on that model's
+    provider when it is not the OpenAI-compatible client.
 
     Skipped entirely when there are no citations. Never raises: on any failure
     (no client, bad JSON, network error) every citation gets empty reasoning
@@ -174,18 +186,23 @@ async def enrich_citations_with_reasoning(
     refs = build_citation_refs(citations)
     ref_ids = [r["ref"] for r in refs]
     try:
-        api_key = user_keys.openai if user_keys and getattr(user_keys, "openai", None) else None
-        client = make_openai(api_key, async_=True)
-        if client is None:
-            raise ValueError("no OpenAI-compatible client available for citation reasoning")
-        resp = await openai_chat(
-            client,
-            model=utility_model(),
-            messages=[{"role": "user", "content": build_reasoning_prompt(query, answer, refs)}],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        payload = json.loads(resp.choices[0].message.content or "{}")
+        prompt = build_reasoning_prompt(query, answer, refs)
+        raw = await chosen_provider_text(prompt, user_keys=user_keys, model=model)
+        if raw is None:
+            api_key = user_keys.openai if user_keys and getattr(user_keys, "openai", None) else None
+            client = make_openai(api_key, async_=True)
+            if client is None:
+                raise ValueError("no OpenAI-compatible client available for citation reasoning")
+            enforce_openai_client(client, "citation reasoning")
+            resp = await openai_chat(
+                client,
+                model=utility_model(),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                response_format={"type": "json_object"},
+            )
+            raw = resp.choices[0].message.content
+        payload = json.loads(strip_json_fences(raw) or "{}")
         joined = join_reasoning_by_ref(payload, ref_ids)
     except Exception as e:  # this pass must never break the chat response
         logger.warning(f"Citation reasoning pass failed: {e}")

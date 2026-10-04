@@ -23,6 +23,9 @@ from typing import Any
 from app.models.schemas import Citation, CitationLogic, CitationStatus, ReasoningStep
 from app.services.authority_mapper.service import find_quote_offset
 from app.services.llm_clients import make_openai, openai_chat, utility_model
+from app.services.provider_policy import enforce_openai_client
+from app.services.rag.generation import chosen_provider_text, strip_json_fences
+from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +76,13 @@ def line_of(text: str, offset: int) -> int:
 
 
 def build_grounding_prompt(query: str, answer: str, files: list[dict[str, Any]]) -> str:
+    # File text is third-party content: delimited so nothing inside it can
+    # be read as an instruction. The block passes the text through verbatim,
+    # so quotes still verify character-for-character against the source.
     file_blocks = "\n\n".join(
-        f'[{f["ref"]}] FILE "{f["name"]}":\n{f["text"][:GROUND_TEXT_LIMIT]}' for f in files
+        f'[{f["ref"]}] FILE "{f["name"]}":\n'
+        + untrusted_block(f"{f['ref']}: {f['name']}", f["text"][:GROUND_TEXT_LIMIT])
+        for f in files
     )
     return (
         "You are grounding an AI answer in the user's source documents. List the "
@@ -97,10 +105,22 @@ def build_grounding_prompt(query: str, answer: str, files: list[dict[str, Any]])
         '{"claims":[{"claim":"...","answer_quote":"...verbatim from the answer...",'
         '"file_ref":"f0","quote":"...verbatim from the file..."}]} '
         f"(at most {MAX_CLAIMS} claims)\n\n"
+        f"{UNTRUSTED_CONTENT_RULE}\n\n"
         f"QUESTION:\n{query}\n\n"
         f"ANSWER:\n{answer[:ANSWER_LIMIT]}\n\n"
         f"FILES:\n{file_blocks}"
     )
+
+
+def _retrieval_scores(search_results: list[dict[str, Any]]) -> dict[str, float]:
+    """Best real retrieval similarity per document among this request's results."""
+    best: dict[str, float] = {}
+    for r in search_results:
+        did = (r.get("metadata") or {}).get("document_id")
+        score = r.get("similarity")
+        if did and isinstance(score, (int, float)):
+            best[did] = max(best.get(did, 0.0), float(score))
+    return best
 
 
 async def ground_answer_claims(
@@ -110,8 +130,13 @@ async def ground_answer_claims(
     search_results: list[dict[str, Any]],
     user_id: str | None,
     user_keys=None,
+    model: str | None = None,
 ) -> list[Citation] | None:
-    """Return claim citations for the answer, or None to keep chunk citations."""
+    """Return claim citations for the answer, or None to keep chunk citations.
+
+    ``model`` is the user's chosen chat model; the grounding call runs on that
+    model's provider when it is not the OpenAI-compatible client.
+    """
     # Lazy import: documents.py imports the rag package at module load.
     from app.services.documents import document_service
 
@@ -126,10 +151,6 @@ async def ground_answer_claims(
     if not doc_ids or len(doc_ids) > GROUND_MAX_FILES:
         return None
 
-    client = make_openai(_api_key(user_keys), async_=True)
-    if client is None:
-        return None
-
     files: list[dict[str, Any]] = []
     for i, did in enumerate(doc_ids):
         loaded = await document_service.get_document_text(did, user_id)
@@ -139,15 +160,23 @@ async def ground_answer_claims(
     if not files:
         return None
 
-    resp = await openai_chat(
-        client,
-        model=utility_model(),
-        messages=[{"role": "user", "content": build_grounding_prompt(query, answer, files)}],
-        temperature=0.0,
-        response_format={"type": "json_object"},
-    )
+    prompt = build_grounding_prompt(query, answer, files)
+    raw = await chosen_provider_text(prompt, user_keys=user_keys, model=model)
+    if raw is None:
+        client = make_openai(_api_key(user_keys), async_=True)
+        if client is None:
+            return None
+        enforce_openai_client(client, "claim grounding")
+        resp = await openai_chat(
+            client,
+            model=utility_model(),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content
     try:
-        data = json.loads(resp.choices[0].message.content or "{}")
+        data = json.loads(strip_json_fences(raw) or "{}")
     except (ValueError, TypeError):
         return None
     claims = data.get("claims") if isinstance(data, dict) else None
@@ -155,6 +184,10 @@ async def ground_answer_claims(
         return None
 
     by_ref = {f["ref"]: f for f in files}
+    # The only real score a claim citation has is how well its source file
+    # matched the question at retrieval time. Whether the quote was found
+    # verbatim is carried by ``verified`` — it is a fact, not a percentage.
+    retrieval = _retrieval_scores(search_results)
     citations: list[Citation] = []
     rank = 0
     for c in claims[:MAX_CLAIMS]:
@@ -183,9 +216,9 @@ async def ground_answer_claims(
                 id=f"claim-{uuid.uuid4().hex[:8]}",
                 source=f["name"],
                 type="document",
-                confidence=95.0 if verified else 40.0,
+                confidence=round(retrieval.get(f["id"], 0.0) * 100, 1),
                 status=CitationStatus.PENDING,
-                similarity=0.95 if verified else 0.4,
+                similarity=retrieval.get(f["id"], 0.0),
                 relevance_rank=rank,
                 chunk_index=0,
                 token_count=0,

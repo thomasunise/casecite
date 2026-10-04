@@ -25,9 +25,4 @@ class LegalToolsService(
     """
 
     def __init__(self):
-        token = getattr(settings, "courtlistener_api_token", None)
-        # Treat empty string as None
-        self.api_token = token if token and token.strip() else None
-        self.headers = {"Accept": "application/json"}
-        if self.api_token:
-            self.headers["Authorization"] = f"Token {self.api_token}"
+        self.set_token(getattr(settings, "courtlistener_api_token", None))

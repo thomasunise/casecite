@@ -7,8 +7,6 @@ Source: backend/app/services/conversation_export.py
 import io
 import os
 
-import pytest
-
 os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
 os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
 os.environ["DEBUG"] = "true"
@@ -89,7 +87,6 @@ class TestDocx:
 
 class TestPdf:
     def test_pdf_bytes(self):
-        pytest.importorskip("reportlab")
         blob = render_pdf("Lease questions", MESSAGES)
         assert blob[:4] == b"%PDF"
         assert len(blob) > 500
@@ -126,7 +123,6 @@ class TestReviewNotice:
         import re
         import zlib
 
-        pytest.importorskip("reportlab")
         blob = render_pdf("Lease questions", MESSAGES)
         # reportlab content streams are ASCII85 + Flate encoded.
         text = b""

@@ -182,13 +182,15 @@ class TestDocumentService:
         svc.documents = {"d1": doc}
 
         mock_rag = AsyncMock()
-        mock_rag.delete_document = AsyncMock()
+        mock_rag.delete_document = AsyncMock(return_value=True)
+        derived = AsyncMock()
 
         with (
             patch("app.services.documents.rag_service", mock_rag),
             patch("os.path.exists", return_value=True),
             patch("os.remove"),
             patch.object(svc, "_save_index"),
+            patch.object(svc, "_delete_derived_data", derived),
             patch.object(svc, "_get_user_upload_dir", return_value="/tmp/uploads/user-1"),
         ):
             result = await svc.delete_document("d1", "user-1")
@@ -196,6 +198,53 @@ class TestDocumentService:
         assert result is True
         assert "d1" not in svc.documents
         mock_rag.delete_document.assert_called_once_with("d1")
+        # Analyses and authority maps derived from the document go with it.
+        derived.assert_awaited_once_with(["d1"])
+
+    @pytest.mark.asyncio
+    async def test_delete_document_keeps_document_when_vectors_remain(self):
+        """A failed vector delete must not leave orphaned, searchable chunks."""
+        from app.services.documents import DocumentDeletionError
+
+        svc = self._make_service()
+        svc.documents = {"d1": _make_mock_document(doc_id="d1", user_id="user-1")}
+
+        mock_rag = AsyncMock()
+        mock_rag.delete_document = AsyncMock(return_value=False)
+        derived = AsyncMock()
+
+        with (
+            patch("app.services.documents.rag_service", mock_rag),
+            patch("os.remove") as remove,
+            patch.object(svc, "_save_index"),
+            patch.object(svc, "_delete_derived_data", derived),
+            pytest.raises(DocumentDeletionError),
+        ):
+            await svc.delete_document("d1", "user-1")
+
+        assert "d1" in svc.documents
+        derived.assert_not_awaited()
+        remove.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_document_keeps_document_when_vector_store_raises(self):
+        from app.services.documents import DocumentDeletionError
+
+        svc = self._make_service()
+        svc.documents = {"d1": _make_mock_document(doc_id="d1", user_id="user-1")}
+
+        mock_rag = AsyncMock()
+        mock_rag.delete_document = AsyncMock(side_effect=Exception("chroma is down"))
+
+        with (
+            patch("app.services.documents.rag_service", mock_rag),
+            patch.object(svc, "_save_index"),
+            patch.object(svc, "_delete_derived_data", AsyncMock()),
+            pytest.raises(DocumentDeletionError),
+        ):
+            await svc.delete_document("d1", "user-1")
+
+        assert "d1" in svc.documents
 
     @pytest.mark.asyncio
     async def test_delete_document_wrong_user(self):
@@ -323,22 +372,53 @@ class TestDocumentService:
         svc.documents = {"d1": doc1, "d2": doc2, "d3": doc3}
 
         mock_rag = AsyncMock()
-        mock_rag.delete_document = AsyncMock()
+        mock_rag.delete_document = AsyncMock(return_value=True)
+        derived = AsyncMock()
 
         with (
             patch("app.services.documents.rag_service", mock_rag),
             patch.object(svc, "_save_index"),
+            patch.object(svc, "_delete_derived_data", derived),
             patch.object(svc, "_get_user_upload_dir", return_value="/tmp/uploads/user-1"),
             patch("os.listdir", return_value=[]),
         ):
             result = await svc.clear_all("user-1")
 
         assert result["cleared_documents"] == 2
+        assert result["failed_documents"] == 0
         assert result["status"] == "success"
         # user-2's doc should still exist
         assert "d3" in svc.documents
         assert "d1" not in svc.documents
         assert "d2" not in svc.documents
+        assert derived.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_clear_all_keeps_documents_whose_vectors_remain(self):
+        """A document that cannot be fully removed stays listed, and is reported."""
+        svc = self._make_service()
+        svc.documents = {
+            "d1": _make_mock_document(doc_id="d1", user_id="user-1"),
+            "d2": _make_mock_document(doc_id="d2", user_id="user-1"),
+        }
+
+        mock_rag = AsyncMock()
+        mock_rag.delete_document = AsyncMock(side_effect=[True, False])
+
+        with (
+            patch("app.services.documents.rag_service", mock_rag),
+            patch.object(svc, "_save_index"),
+            patch.object(svc, "_delete_derived_data", AsyncMock()),
+            patch.object(svc, "_get_user_upload_dir", return_value="/tmp/uploads/user-1"),
+            patch("os.listdir") as listdir,
+        ):
+            result = await svc.clear_all("user-1")
+
+        assert result == {"cleared_documents": 1, "failed_documents": 1, "status": "partial"}
+        assert "d1" not in svc.documents
+        assert "d2" in svc.documents
+        # The stray-file sweep is skipped: d2 still needs its stored file.
+        listdir.assert_not_called()
 
     # ------------------------------------------------------------------ #
     # upload_and_index
@@ -353,10 +433,12 @@ class TestDocumentService:
         mock_rag = AsyncMock()
         mock_rag.index_document = AsyncMock(return_value=5)
 
+        from app.services.text_extraction import ExtractionResult
+
         mock_text_extraction = MagicMock()
-        mock_result = MagicMock()
-        mock_result.text = "This is a contract between Party A and Party B."
-        mock_text_extraction.extract.return_value = mock_result
+        mock_text_extraction.extract.return_value = ExtractionResult(
+            text="This is a contract between Party A and Party B."
+        )
 
         _mock_aio_open = AsyncMock()
         mock_aio_file = AsyncMock()
@@ -389,10 +471,13 @@ class TestDocumentService:
         svc = self._make_service()
         svc.documents = {}
 
+        from app.services.text_extraction import ExtractionResult
+
         mock_text_extraction = MagicMock()
-        mock_result = MagicMock()
-        mock_result.text = "   "  # Empty after strip
-        mock_text_extraction.extract.return_value = mock_result
+        mock_text_extraction.extract.return_value = ExtractionResult(
+            text="   ",  # Empty after strip
+            error="No text could be extracted. This looks like a scanned (image-only) PDF.",
+        )
 
         mock_aio_file = AsyncMock()
         mock_aio_file.__aenter__ = AsyncMock(return_value=mock_aio_file)
@@ -414,3 +499,5 @@ class TestDocumentService:
             )
 
         assert doc.status.value == "failed"
+        # The reason is recorded so the UI can say why, not just "failed".
+        assert "scanned" in doc.metadata["error"]

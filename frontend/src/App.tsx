@@ -7,7 +7,6 @@ import { useUIStore } from './stores/uiStore';
 import { useAuthStore } from './stores/authStore';
 import { useSettingsStore } from './stores/settingsStore';
 import { useConnectorsStore } from './stores/connectorsStore';
-import { useCaseComparisonStore } from './stores/caseComparisonStore';
 import { useRagDocsStore } from './stores/ragDocsStore';
 
 // Shared navigate reference for stores
@@ -45,7 +44,6 @@ const App = () => {
   const authState = useAuthStore();
   const appSettingsState = useSettingsStore();
   const connectorsState = useConnectorsStore();
-  const caseComparisonState = useCaseComparisonStore();
   const ragDocsState = useRagDocsStore();
 
   // Load RAG docs when authenticated
@@ -56,8 +54,7 @@ const App = () => {
 
   // Research (before AppUI — AppUI needs setSelectedCitation & inputRef from research)
   const researchState = useResearchState({
-    addToast,
-    ragSettings: appSettingsState.ragSettings, activeMode, setActiveMode,
+    addToast, activeMode, setActiveMode,
   });
 
   // App UI (keyboard shortcuts, file ref)
@@ -66,8 +63,6 @@ const App = () => {
     setShowSignupModal: authState.setShowSignupModal,
     setShowLoginModal: authState.setShowLoginModal,
     setShowPickerModal: connectorsState.setShowPickerModal,
-    setShowProvidersModal: connectorsState.setShowProvidersModal,
-    setShowCaseComparison: caseComparisonState.setShowCaseComparison,
     setActiveMode, inputRef: researchState.inputRef,
   });
 
@@ -75,7 +70,7 @@ const App = () => {
   useAppEffects({
     setUser: authState.setUser, setIsAuthenticated: authState.setIsAuthenticated,
     loadConnectors: connectorsState.loadConnectors,
-    setSystemStats: appSettingsState.setSystemStats, setRagSettings: appSettingsState.setRagSettings,
+    setSystemStats: appSettingsState.setSystemStats,
     messages: researchState.messages, lastMessageRef: researchState.lastMessageRef,
     ragSettings: appSettingsState.ragSettings,
     inputRef: researchState.inputRef, handleSend: researchState.handleSend,

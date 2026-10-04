@@ -93,7 +93,7 @@ def get_user_keys(user_id: str) -> dict[str, str]:
         return {}
     try:
         keys = json.loads(encryption_service.decrypt_string(encrypted))
-    except (ValueError, json.JSONDecodeError) as e:
+    except ValueError as e:  # undecryptable (key/salt changed) or not JSON
         logger.warning(f"Failed to decrypt stored user keys for {user_id}: {e}")
         return {}
 
@@ -138,7 +138,9 @@ def delete_user_keys(user_id: str):
                 del store[user_id]
                 _write_store(store)
     except OSError as e:
-        logger.warning(f"Failed to delete user keys for {user_id}: {e}")
+        # Never report a secret as deleted when it is still on disk.
+        logger.error(f"Failed to delete user keys for {user_id}: {e}")
+        raise RuntimeError("Key storage unavailable") from e
 
     redis_client = get_redis()
     if redis_client:

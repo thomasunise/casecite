@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { registerReset } from './resetRegistry';
 import { api } from '../api';
 import { useUIStore } from './uiStore';
+import { useAuthStore } from './authStore';
 import type { MfaSetup } from '../api/types';
 
 /**
@@ -30,6 +31,9 @@ export interface MfaState {
   // Management code entry (disable / regenerate)
   manageCode: string;
   setManageCode: (val: string) => void;
+  /** Account password — required (with a code) to turn two-factor off. */
+  managePassword: string;
+  setManagePassword: (val: string) => void;
 
   loadStatus: () => Promise<void>;
   beginSetup: () => Promise<void>;
@@ -55,6 +59,8 @@ export const useMfaStore = create<MfaState>((set, get) => ({
 
   manageCode: '',
   setManageCode: (val) => set({ manageCode: val }),
+  managePassword: '',
+  setManagePassword: (val) => set({ managePassword: val }),
 
   loadStatus: async () => {
     try {
@@ -103,6 +109,8 @@ export const useMfaStore = create<MfaState>((set, get) => ({
       });
       addToast('Two-factor authentication enabled', 'success');
       await get().loadStatus();
+      // Clears the "enrollment required" flag on the signed-in user.
+      await useAuthStore.getState().refreshUser();
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       addToast(message, 'error');
@@ -113,7 +121,7 @@ export const useMfaStore = create<MfaState>((set, get) => ({
 
   disable: async () => {
     const { addToast, showConfirm } = useUIStore.getState();
-    const { manageCode } = get();
+    const { manageCode, managePassword } = get();
     showConfirm({
       title: 'Disable two-factor authentication',
       message: 'Your account will no longer require a second factor at sign-in. Continue?',
@@ -121,10 +129,11 @@ export const useMfaStore = create<MfaState>((set, get) => ({
       onConfirm: async () => {
         set({ loading: true });
         try {
-          await api.disableMfa(manageCode);
-          set({ manageCode: '', freshRecoveryCodes: null });
+          await api.disableMfa(manageCode, managePassword);
+          set({ manageCode: '', managePassword: '', freshRecoveryCodes: null });
           addToast('Two-factor authentication disabled', 'info');
           await get().loadStatus();
+          await useAuthStore.getState().refreshUser();
         } catch (error: unknown) {
           const message = error instanceof Error ? error.message : String(error);
           addToast(message, 'error');

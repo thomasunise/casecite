@@ -40,6 +40,10 @@ _DEAD_LETTER_TTL = getattr(settings, "job_dead_letter_ttl", 604800)  # 7 d
 _MAX_RESULT_SIZE = getattr(settings, "job_max_result_size", 1_048_576)  # 1 MB
 _SHUTDOWN_TIMEOUT = getattr(settings, "job_shutdown_timeout", 30)
 _PROCESSING_TTL = 7200  # 2 h — pending/processing jobs
+# In-memory fallback bound (Redis unavailable): entries honour the same TTLs as
+# Redis and the store never holds more than this many jobs. Each job can carry
+# up to _MAX_RESULT_SIZE of result, so this caps the fallback's memory use.
+_MEMORY_MAX_JOBS = getattr(settings, "job_memory_max_jobs", 200)
 
 # The job a coroutine is running under, so work deep inside a pipeline can
 # report progress without threading the job id through every signature.
@@ -81,7 +85,15 @@ RETRY_POLICIES: dict[str, RetryPolicy] = {
     "ai_analysis": RetryPolicy(max_retries=2, backoff_base=3.0, max_delay=30.0),
     "external_api": RetryPolicy(max_retries=3, backoff_base=2.0, max_delay=20.0),
     "cpu_bound": RetryPolicy(max_retries=1, backoff_base=1.0, max_delay=5.0),
+    # A connector sync is idempotent per file (files unchanged since the last
+    # run are skipped), so a retry resumes rather than re-downloading. One
+    # retry covers a transient provider error without hammering a failing API.
+    "connector_sync": RetryPolicy(max_retries=1, backoff_base=5.0, max_delay=30.0),
 }
+
+
+def _is_connector_sync(endpoint: str) -> bool:
+    return endpoint.startswith("/connectors/") and endpoint.endswith("/sync")
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +107,10 @@ class JobManager:
     def __init__(self) -> None:
         # Active asyncio.Task objects keyed by job_id (for cancellation)
         self._tasks: dict[str, asyncio.Task] = {}
-        # In-memory fallback when Redis is unavailable
+        # In-memory fallback when Redis is unavailable. Bounded: entries expire
+        # on the same TTLs Redis would apply (see _evict_memory).
         self._memory: dict[str, dict] = {}
+        self._memory_expiry: dict[str, float] = {}
         # Bound concurrent execution so a burst of submissions can't exhaust
         # memory / DB / upstream connections in the API process.
         self._semaphore = asyncio.Semaphore(getattr(settings, "job_max_concurrency", 5))
@@ -121,6 +135,9 @@ class JobManager:
         """
         job_id = str(uuid.uuid4())
         policy = retry_policy or RETRY_POLICIES.get("ai_analysis", RetryPolicy())
+        if _is_connector_sync(endpoint):
+            # Whatever policy the caller passed, a sync gets the modest one.
+            policy = RETRY_POLICIES["connector_sync"]
 
         now = datetime.now(UTC).isoformat()
         job_data = {
@@ -325,7 +342,9 @@ class JobManager:
             data["attempts"] = attempt
             try:
                 result = await coro_factory()
-                # Serialise result
+                # Serialise result. The result is stored with the job (Redis or
+                # the in-memory fallback), so it is capped at _MAX_RESULT_SIZE and
+                # expires after _RESULT_TTL.
                 result_json = json.dumps(result, default=str)
                 truncated = False
                 if len(result_json) > _MAX_RESULT_SIZE:
@@ -410,6 +429,30 @@ class JobManager:
             except (RedisError, ConnectionError, OSError):
                 pass
         self._memory[job_id] = data
+        self._memory_expiry[job_id] = time.time() + ttl
+        self._evict_memory()
+
+    def _evict_memory(self) -> None:
+        """Drop expired in-memory jobs, then the oldest finished ones over the cap."""
+        now = time.time()
+        for jid in [j for j, exp in self._memory_expiry.items() if exp <= now]:
+            self._memory.pop(jid, None)
+            self._memory_expiry.pop(jid, None)
+        overflow = len(self._memory) - _MEMORY_MAX_JOBS
+        if overflow <= 0:
+            return
+        active = (JobStatus.PENDING.value, JobStatus.PROCESSING.value)
+        # Finished jobs go first (oldest first); running jobs only as a last resort.
+        candidates = sorted(
+            self._memory,
+            key=lambda j: (
+                self._memory[j].get("status") in active,
+                self._memory[j].get("updated_at") or "",
+            ),
+        )
+        for jid in candidates[:overflow]:
+            self._memory.pop(jid, None)
+            self._memory_expiry.pop(jid, None)
 
     def _load_job(self, job_id: str) -> dict | None:
         redis_client = self._get_redis()
@@ -420,6 +463,11 @@ class JobManager:
                     return json.loads(raw)
             except (RedisError, ConnectionError, OSError):
                 pass
+        expiry = self._memory_expiry.get(job_id)
+        if expiry is not None and expiry <= time.time():
+            self._memory.pop(job_id, None)
+            self._memory_expiry.pop(job_id, None)
+            return None
         return self._memory.get(job_id)
 
     def _add_user_job(self, user_id: str, job_id: str) -> None:

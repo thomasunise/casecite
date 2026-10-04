@@ -58,9 +58,6 @@
   display: none;
 }
 
-
-
-
 /* The floating conversation overlay is the shared FloatingChatDock component. */
 
 /* ===== Quick action bar ===== */
@@ -193,55 +190,6 @@
 }
 
 /* ===== Compare dropdown ===== */
-.compareWrap {
-  position: relative;
-}
-
-.compareMenu {
-  position: absolute;
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 60;
-  min-width: 240px;
-  max-width: 340px;
-  max-height: 260px;
-  overflow-y: auto;
-  background: white;
-  border: 1px solid var(--gray-200);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-  padding: 4px;
-}
-
-.compareMenuItem {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  font-size: 13px;
-  color: var(--gray-800);
-  text-align: left;
-  cursor: pointer;
-}
-
-.compareMenuItem:hover {
-  background: var(--gray-50);
-}
-
-.compareMenuIcon {
-  color: var(--navy-700);
-  flex-shrink: 0;
-}
-
-.compareMenuName {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* ===== Past analyses panel (collapsible) ===== */
 .pastPanel {
@@ -272,6 +220,47 @@
   cursor: pointer;
 }
 
+/* A past-analysis row plus its delete control (a button cannot nest in a button). */
+.pastItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.pastItem:last-child {
+  border-bottom: none;
+}
+
+.pastItem .pastRow {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+
+.pastDelete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+}
+
+.pastDelete:hover:not(:disabled) {
+  color: var(--red-700);
+  background: var(--gray-100);
+}
+
+.pastDelete:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .pastRow:last-child {
   border-bottom: none;
 }
@@ -297,12 +286,6 @@
 .pastMeta {
   font-size: 12px;
   color: var(--gray-500);
-}
-
-.pastRisk {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  color: var(--gray-600);
 }
 
 .pastChevron {
@@ -677,7 +660,6 @@
   color: var(--gray-600);
 }
 
-
 /* Floating conversation dock — the contracts composer is taller than the
    default (mode pills stack above the input), so the panel rests higher to
    never cover the Ask/Review/Redline/Draft pills. */
@@ -687,37 +669,6 @@
 }
 
 /* ── Armed comparison strip (above the composer) ─────────────────── */
-.compareArmedStrip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  max-width: 720px;
-  margin: 0 auto 8px;
-  padding: 8px 14px;
-  font-size: 12px;
-  color: var(--navy-800);
-  background: var(--navy-50, #eef2f7);
-  border: 1px solid var(--navy-200, #c7d4e4);
-  border-radius: 8px;
-}
-
-.compareArmedStrip strong { font-weight: 600; }
-
-.compareArmedCancel {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  margin-left: auto;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--gray-500);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.compareArmedCancel:hover { background: var(--gray-100); color: var(--gray-700); }
 
 .comparisonSetStack {
   display: flex;
@@ -726,99 +677,8 @@
 }
 
 /* ── Drafting canvas (pre-draft page) ────────────────────────────── */
-.draftCanvas {
-  position: relative;
-  max-width: 860px;
-  margin: 0 auto;
-  min-height: 480px;
-  background: white;
-  border: 1px solid var(--gray-200);
-  border-radius: 10px;
-  display: flex;
-  flex-direction: column;
-}
 
 /* Reference documents bar — the draft's source material lives up top. */
-.draftRefBar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 14px 18px;
-  padding-right: 52px; /* clear the close button */
-  border-bottom: 1px solid var(--gray-100);
-}
-
-.draftRefBarLabel {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--gray-500);
-  margin-right: 4px;
-}
-
-.attachRefBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  border: 1px dashed var(--gray-300);
-  border-radius: 8px;
-  background: white;
-  color: var(--gray-600);
-  cursor: pointer;
-}
-.attachRefBtn:hover:not(:disabled) { border-color: var(--navy-700); color: var(--navy-800); }
-.attachRefBtn:disabled { opacity: 0.5; cursor: default; }
-
-.draftCanvasClose {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: 8px;
-  background: var(--gray-100);
-  color: var(--gray-600);
-  cursor: pointer;
-}
-.draftCanvasClose:hover { background: var(--gray-200); }
-
-.draftCanvasBody {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  align-self: center;
-  text-align: center;
-  gap: 10px;
-  max-width: 460px;
-  padding: 40px 24px;
-}
-
-.draftCanvasIcon { color: var(--navy-700); }
-
-.draftCanvasTitle {
-  font-size: 17px;
-  font-weight: 600;
-  color: var(--navy-900);
-  margin: 0;
-}
-
-.draftCanvasText {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--gray-500);
-  margin: 0;
-}
 
 /* Paperclip in the composer — same square family as the send button. */
 .attachBtn {
@@ -838,37 +698,4 @@
 .attachBtn:disabled { opacity: 0.5; cursor: default; }
 
 /* Attached drafting reference chip on the canvas */
-.draftRefChip {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
-  font-size: 12.5px;
-  color: var(--navy-800);
-  background: var(--gray-50);
-  border: 1px solid var(--gray-200);
-  border-radius: 8px;
-  max-width: 100%;
-}
 
-.draftRefName {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-}
-
-.draftRefClear {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--gray-500);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.draftRefClear:hover { background: var(--gray-200); color: var(--gray-700); }

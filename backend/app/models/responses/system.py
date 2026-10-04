@@ -19,8 +19,10 @@ class HealthResponse(BaseModel):
 
     status: str
     timestamp: str
-    version: str | None = None
     started_at: str | None = None
+    # Admin-only (omitted for unauthenticated callers in production)
+    version: str | None = None
+    build: str | None = None
     environment: str | None = None
     components: dict[str, Any] | None = None
 

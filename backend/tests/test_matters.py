@@ -12,11 +12,10 @@ os.environ.setdefault("DEBUG", "true")
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-
 from app.models.base import Base
 from app.models.matters import Matter, MatterMember  # noqa: F401  (register metadata)
 from app.services import matters as svc
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 
 @pytest_asyncio.fixture

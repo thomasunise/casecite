@@ -9,6 +9,11 @@ critically — verifies each supporting quote is present *verbatim* in the real
 source text before presenting it. Unverifiable quotes are flagged, never
 silently shown. Results are persisted with character offsets so the frontend
 can anchor each citation back to its exact location for due-diligence review.
+
+The document and each candidate opinion are read in windows, so text past the
+first window is not ignored. The work is still bounded (a cap on windows and on
+propositions researched); whatever the bounds leave out is reported in the
+run's ``summary["coverage"]`` rather than passed over in silence.
 """
 
 from __future__ import annotations
@@ -30,8 +35,33 @@ logger = logging.getLogger(__name__)
 # Bounds keep the (async) job's cost and latency predictable.
 MAX_PROPOSITIONS = 8
 MAX_CANDIDATES_PER_PROP = 4
-OPINION_TEXT_LIMIT = 14000
-DOC_TEXT_LIMIT = 18000
+# The document and each opinion are read window by window. Windows overlap so
+# a sentence straddling a boundary is still seen whole in one of them.
+WINDOW_CHARS = 60_000
+WINDOW_OVERLAP = 2_000
+MAX_DOCUMENT_WINDOWS = max(1, int(getattr(settings, "authority_map_max_document_windows", 8)))
+MAX_OPINION_WINDOWS = max(1, int(getattr(settings, "authority_map_max_opinion_windows", 4)))
+
+
+def _windows(text: str, max_windows: int) -> tuple[list[str], int]:
+    """Split ``text`` into overlapping windows, at most ``max_windows`` of them.
+
+    Returns (windows, chars_covered): ``chars_covered < len(text)`` means the
+    cap left the tail unread.
+    """
+    if len(text) <= WINDOW_CHARS:
+        return [text], len(text)
+    windows: list[str] = []
+    covered = 0
+    step = WINDOW_CHARS - WINDOW_OVERLAP
+    for start in range(0, len(text), step):
+        if len(windows) >= max_windows:
+            break
+        windows.append(text[start : start + WINDOW_CHARS])
+        covered = min(len(text), start + WINDOW_CHARS)
+        if covered >= len(text):
+            break
+    return windows, covered
 
 
 def _normalize_ws(s: str) -> str:
@@ -68,7 +98,10 @@ class AuthorityMapperService:
             return user_keys.openai
         return settings.openai_api_key
 
-    async def _extract_propositions(self, client, text: str) -> list[dict]:
+    async def _extract_window_propositions(self, client, window: str, part: str) -> list[dict]:
+        # Imported here: app.services.rag imports this module's package.
+        from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
+
         prompt = (
             "You are a litigation research assistant. Read the document and identify the "
             "key legal propositions or factual assertions that would benefit from supporting "
@@ -77,8 +110,9 @@ class AuthorityMapperService:
             "lawyer would use to find supporting cases.\n\n"
             'Return STRICT JSON: {"propositions":[{"proposition":"...","doc_quote":"...verbatim...",'
             '"query":"..."}]}.\n'
-            f"Return at most {MAX_PROPOSITIONS} of the most important.\n\nDOCUMENT:\n"
-            + text[:DOC_TEXT_LIMIT]
+            f"Return at most {MAX_PROPOSITIONS} of the most important, most important first.\n\n"
+            f"{UNTRUSTED_CONTENT_RULE}\n\n"
+            f"DOCUMENT ({part}):\n" + untrusted_block(f"Document, {part}", window)
         )
         resp = await openai_chat(
             client,
@@ -89,15 +123,90 @@ class AuthorityMapperService:
         )
         data = json.loads(resp.choices[0].message.content or "{}")
         props = data.get("propositions") or []
-        return props[:MAX_PROPOSITIONS]
+        return [p for p in props if isinstance(p, dict)][:MAX_PROPOSITIONS]
+
+    async def _extract_propositions(self, client, text: str) -> tuple[list[dict], dict]:
+        """Propositions from across the WHOLE document, plus what was covered.
+
+        Every window is read. The propositions researched are then drawn from
+        the windows in turn (each window's most important first), so a long
+        filing's later sections are represented instead of the first pages
+        using up the whole budget.
+        """
+        windows, covered = _windows(text, MAX_DOCUMENT_WINDOWS)
+        per_window: list[list[dict]] = []
+        failures = 0
+        last_error: Exception | None = None
+        for index, window in enumerate(windows):
+            part = f"part {index + 1} of {len(windows)}"
+            try:
+                per_window.append(await self._extract_window_propositions(client, window, part))
+            except Exception as e:  # one window failing must not lose the others
+                failures += 1
+                last_error = e
+                logger.warning(f"proposition extraction failed for {part}: {e}")
+                per_window.append([])
+        if failures == len(windows) and last_error is not None:
+            raise last_error
+
+        selected: list[dict] = []
+        seen: set[str] = set()
+        identified = 0
+        depth = max((len(props) for props in per_window), default=0)
+        for rank in range(depth):
+            for props in per_window:
+                if rank >= len(props):
+                    continue
+                prop = props[rank]
+                key = _normalize_ws(str(prop.get("doc_quote") or prop.get("proposition") or ""))
+                if not key or key.lower() in seen:
+                    continue
+                seen.add(key.lower())
+                identified += 1
+                if len(selected) < MAX_PROPOSITIONS:
+                    selected.append(prop)
+
+        coverage = {
+            "document_chars": len(text),
+            "document_chars_read": covered,
+            "document_windows_read": len(windows) - failures,
+            "document_windows_failed": failures,
+            "document_truncated": covered < len(text),
+            "propositions_identified": identified,
+            "propositions_researched": len(selected),
+            "propositions_limit": MAX_PROPOSITIONS,
+        }
+        return selected, coverage
 
     async def _check_support(
         self, client, proposition: str, source_name: str, source_text: str
     ) -> dict:
+        """Look for supporting language anywhere in the source, window by window.
+
+        Returns the first window's verdict that finds support. ``partially_read``
+        is set when the source was longer than MAX_OPINION_WINDOWS windows and
+        no support was found in the part that was read.
+        """
+        windows, covered = _windows(source_text, MAX_OPINION_WINDOWS)
+        res: dict = {}
+        for index, window in enumerate(windows):
+            part = f"part {index + 1} of {len(windows)}"
+            res = await self._check_support_window(client, proposition, source_name, window, part)
+            if res.get("supports"):
+                return res
+        res = dict(res) if isinstance(res, dict) else {}
+        res["partially_read"] = covered < len(source_text)
+        return res
+
+    async def _check_support_window(
+        self, client, proposition: str, source_name: str, window: str, part: str
+    ) -> dict:
+        from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
+
         prompt = (
             "A lawyer needs authority supporting this proposition:\n"
             f'"{proposition}"\n\n'
-            f"Below is the text of {source_name}. If — and only if — it contains language that "
+            f"Below is the text of {source_name} ({part}). If — and only if — it contains language that "
             "supports the proposition, copy the single most on-point passage VERBATIM "
             "(character-for-character, no paraphrase, no ellipses). If it does not support the "
             "proposition, return supports=false.\n\n"
@@ -114,7 +223,8 @@ class AuthorityMapperService:
             '{"supports":true|false,"quote":"...verbatim...","relevance":0.0-1.0,'
             '"reasoning":[{"type":"...","description":"...","evidence":"..."}],'
             '"application":"..."}.\n\n'
-            f"SOURCE:\n{source_text[:OPINION_TEXT_LIMIT]}"
+            f"{UNTRUSTED_CONTENT_RULE}\n\n"
+            "SOURCE:\n" + untrusted_block(f"Source text, {part}", window)
         )
         resp = await openai_chat(
             client,
@@ -191,8 +301,10 @@ class AuthorityMapperService:
             )
         run_id = uuid.uuid4().hex
 
-        props = await self._extract_propositions(client, text)
+        props, coverage = await self._extract_propositions(client, text)
         mappings: list[dict] = []
+        opinions_checked = 0
+        opinions_partially_read = 0
 
         for p in props:
             proposition = (p.get("proposition") or "").strip()
@@ -212,7 +324,10 @@ class AuthorityMapperService:
                 except Exception as e:
                     logger.warning(f"support check failed: {e}")
                     continue
+                opinions_checked += 1
                 if not res.get("supports"):
+                    if res.get("partially_read"):
+                        opinions_partially_read += 1
                     continue
                 quote = (res.get("quote") or "").strip()
                 off = find_quote_offset(ctext, quote) if quote else None
@@ -246,6 +361,13 @@ class AuthorityMapperService:
             "authorities": len(mappings),
             "verified": verified_count,
             "courtlistener": len(mappings),
+            # What the bounds left out, so the UI never has to imply the whole
+            # document (or every opinion) was read when it was not.
+            "coverage": {
+                **coverage,
+                "opinions_checked": opinions_checked,
+                "opinions_partially_read": opinions_partially_read,
+            },
         }
 
         async with AsyncSessionLocal() as db:

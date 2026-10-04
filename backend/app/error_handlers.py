@@ -4,9 +4,17 @@ Error Handlers
 Registers all exception handlers on the FastAPI application:
 validation errors, HTTP exceptions, value errors, permission errors,
 and a general catch-all handler.
+
+Exception MESSAGES are never copied into the audit trail and, outside DEBUG,
+never into the application log: they can carry SQL parameters, document or
+chat text, and secrets. Production records the exception type, the stack
+frames (code locations only) and an error reference that ties the client's
+response to the log line.
 """
 
 import logging
+import time
+import traceback
 import uuid as uuid_module
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,13 +23,50 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.services.audit import AuditEventType, audit_service
+from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
+
+# Anonymous 401s (no credentials presented at all) are what every scanner,
+# expired tab and health probe produces. Auditing each one lets anyone flood
+# the tamper-evident trail, so they are recorded at most once per client IP
+# per window. Requests that DO present credentials are always audited.
+_ANON_401_AUDIT_WINDOW_SECONDS = 60
+_ANON_401_MAX_TRACKED_IPS = 10_000
+_anon_401_last_audit: dict[str, float] = {}
 
 
 def _generate_error_reference() -> str:
     """Generate a unique error reference ID for tracking."""
     return f"ERR-{uuid_module.uuid4().hex[:8].upper()}"
+
+
+def _presented_credentials(request: Request) -> bool:
+    return bool(request.headers.get("authorization") or request.cookies.get("access_token"))
+
+
+def _should_audit_denial(request: Request, status_code: int, client_ip: str | None) -> bool:
+    """Whether a 401/403 gets an audit entry (anonymous 401s are rate-bounded)."""
+    if status_code != 401 or _presented_credentials(request):
+        return True
+    now = time.monotonic()
+    key = client_ip or "unknown"
+    last = _anon_401_last_audit.get(key)
+    if last is not None and now - last < _ANON_401_AUDIT_WINDOW_SECONDS:
+        return False
+    if len(_anon_401_last_audit) >= _ANON_401_MAX_TRACKED_IPS:
+        cutoff = now - _ANON_401_AUDIT_WINDOW_SECONDS
+        for ip in [ip for ip, ts in _anon_401_last_audit.items() if ts < cutoff]:
+            del _anon_401_last_audit[ip]
+        if len(_anon_401_last_audit) >= _ANON_401_MAX_TRACKED_IPS:
+            _anon_401_last_audit.clear()
+    _anon_401_last_audit[key] = now
+    return True
+
+
+def _stack_locations(exc: BaseException) -> str:
+    """The exception's stack frames WITHOUT its message (code locations only)."""
+    return "".join(traceback.format_tb(exc.__traceback__))
 
 
 def register_error_handlers(app: FastAPI) -> None:
@@ -76,17 +121,19 @@ def register_error_handlers(app: FastAPI) -> None:
 
         # Log security-relevant errors
         if exc.status_code in [401, 403]:
-            await audit_service.log_event(
-                event_type=AuditEventType.ACCESS_DENIED,
-                ip_address=request.client.host if request.client else None,
-                details={
-                    "error_ref": error_ref,
-                    "path": str(request.url.path),
-                    "status_code": exc.status_code,
-                    "detail": exc.detail,
-                },
-                success=False,
-            )
+            client_ip = get_client_ip(request)
+            if _should_audit_denial(request, exc.status_code, client_ip):
+                await audit_service.log_event(
+                    event_type=AuditEventType.ACCESS_DENIED,
+                    ip_address=client_ip,
+                    details={
+                        "error_ref": error_ref,
+                        "path": str(request.url.path),
+                        "status_code": exc.status_code,
+                        "detail": exc.detail,
+                    },
+                    success=False,
+                )
 
         # For 500 errors in production, never expose raw detail
         detail = exc.detail
@@ -96,12 +143,21 @@ def register_error_handlers(app: FastAPI) -> None:
             )
             detail = "An internal error occurred. Please try again."
 
+        content = {
+            "detail": detail,
+            "error_ref": error_ref if exc.status_code >= 500 else None,
+        }
+        # Machine-readable reason for 403s that mean "finish a step first"
+        # (app.services.auth.AuthActionRequired): password_change_required,
+        # mfa_enrollment_required.
+        code = getattr(exc, "code", None)
+        if code:
+            content["code"] = code
+
         return JSONResponse(
             status_code=exc.status_code,
-            content={
-                "detail": detail,
-                "error_ref": error_ref if exc.status_code >= 500 else None,
-            },
+            content=content,
+            headers=getattr(exc, "headers", None),
         )
 
     @app.exception_handler(ValueError)
@@ -109,8 +165,14 @@ def register_error_handlers(app: FastAPI) -> None:
         """Handle ValueError (usually validation errors)."""
         error_ref = _generate_error_reference()
 
-        # Log the error details server-side
-        logger.warning(f"ValueError [{error_ref}]: {exc} at {request.url.path}")
+        # Log the error server-side. The message is only included in DEBUG: a
+        # ValueError raised deep in a service can quote the offending input.
+        if settings.debug:
+            logger.warning(f"ValueError [{error_ref}]: {exc} at {request.url.path}")
+        else:
+            logger.warning(
+                f"ValueError [{error_ref}] at {request.url.path}\n{_stack_locations(exc)}"
+            )
 
         # Return safe message to client
         return JSONResponse(
@@ -128,11 +190,11 @@ def register_error_handlers(app: FastAPI) -> None:
 
         await audit_service.log_event(
             event_type=AuditEventType.ACCESS_DENIED,
-            ip_address=request.client.host if request.client else None,
+            ip_address=get_client_ip(request),
             details={
                 "error_ref": error_ref,
                 "path": str(request.url.path),
-                "error": str(exc),
+                "error_type": type(exc).__name__,
             },
             success=False,
         )
@@ -150,23 +212,27 @@ def register_error_handlers(app: FastAPI) -> None:
         """Handle unexpected exceptions with error reference tracking."""
         error_ref = _generate_error_reference()
 
-        # Log full error details server-side
-        logger.error(
-            f"Unhandled exception [{error_ref}]: {type(exc).__name__}: {exc}", exc_info=True
-        )
+        if settings.debug:
+            # Development: full message and traceback.
+            logger.error(
+                f"Unhandled exception [{error_ref}]: {type(exc).__name__}: {exc}", exc_info=True
+            )
+        else:
+            # Production: type, reference and code locations — not the message.
+            logger.error(
+                f"Unhandled exception [{error_ref}]: {type(exc).__name__} at "
+                f"{request.url.path}\n{_stack_locations(exc)}"
+            )
 
         await audit_service.log_event(
             event_type=AuditEventType.SUSPICIOUS_ACTIVITY,
-            ip_address=request.client.host if request.client else None,
+            ip_address=get_client_ip(request),
             details={
                 "error_ref": error_ref,
                 "path": str(request.url.path),
                 "error_type": type(exc).__name__,
-                # Only include error message in logs, not in response
-                "error": str(exc),
             },
             success=False,
-            error=str(exc),
         )
 
         # Return safe message to client with error reference

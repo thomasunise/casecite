@@ -1,19 +1,28 @@
 """
 Tenant Isolation Tests
 
-Verifies that multi-tenant data isolation works correctly:
-- User A cannot see User B's documents
-- User A cannot search User B's vectors
-- User A's settings don't affect User B
-- Deleting User A's data doesn't touch User B's data
+Verifies over the real HTTP API that one user cannot reach another user's
+data: documents (list, tree, metadata, content, file, move, delete), contract
+analyses, authority maps, workspace sessions, chat sessions, background jobs
+and RAG settings. Every cross-user test seeds a REAL object owned by User A and
+asserts User B is refused and the object survives.
 """
 
+import uuid
 from datetime import UTC, datetime
+from unittest.mock import patch
 
+import pytest
+from app.models.authority_map import AuthorityMapping, AuthorityMapRun
+from app.models.clause_intel import ContractAnalysisRun
+from app.models.tracking import WorkspaceSessionDB
 from app.services.auth import User, UserRole
+from app.services.documents import document_service
+from app.services.job_queue import job_manager
 from fastapi.testclient import TestClient
 
 from tests.conftest import make_auth_headers
+from tests.helpers import db_add, db_count, headers, insert_db_user, make_user, register_document
 
 
 def _make_user(user_id: str, email: str) -> User:
@@ -38,39 +47,224 @@ HEADERS_A = _make_headers(USER_A)
 HEADERS_B = _make_headers(USER_B)
 
 
+@pytest.mark.usefixtures("no_rate_limit")
 class TestDocumentIsolation:
-    """Test that documents are isolated between users."""
+    """User B must not be able to see, read, download or delete User A's document."""
 
-    def test_user_a_documents_invisible_to_user_b(self, client: TestClient):
-        """User A's documents should not appear in User B's document list."""
-        # List documents as User A
-        response_a = client.get("/api/v1/documents", headers=HEADERS_A)
-        assert response_a.status_code == 200
-        docs_a = response_a.json()
+    @pytest.fixture
+    def doc_a(self):
+        """A real registered document owned by User A."""
+        doc_id = register_document(USER_A, filename="privileged-memo.pdf")
+        yield doc_id
+        document_service.documents.pop(doc_id, None)
 
-        # List documents as User B
-        response_b = client.get("/api/v1/documents", headers=HEADERS_B)
-        assert response_b.status_code == 200
-        docs_b = response_b.json()
+    def test_owner_can_see_own_document(self, client: TestClient, doc_a):
+        listed = client.get("/api/v1/documents", headers=HEADERS_A)
+        assert listed.status_code == 200
+        assert doc_a in {d["id"] for d in listed.json()["documents"]}
+        assert client.get(f"/api/v1/documents/{doc_a}", headers=HEADERS_A).status_code == 200
 
-        # Both should return only their own documents (initially empty)
-        # The key assertion: document IDs from A should never appear in B's list
-        doc_ids_a = {d["id"] for d in docs_a.get("documents", [])}
-        doc_ids_b = {d["id"] for d in docs_b.get("documents", [])}
-        assert doc_ids_a.isdisjoint(doc_ids_b), "Users should not share any document IDs"
+    def test_other_user_does_not_see_it_in_list_or_tree(self, client: TestClient, doc_a):
+        listed = client.get("/api/v1/documents", headers=HEADERS_B)
+        assert listed.status_code == 200
+        assert doc_a not in {d["id"] for d in listed.json()["documents"]}
 
-    def test_user_cannot_get_other_users_document(self, client: TestClient):
-        """User B should not be able to retrieve User A's document by ID."""
-        # Try to get a non-existent document as User B (simulating cross-tenant access)
-        response = client.get("/api/v1/documents/fake-doc-id-from-user-a", headers=HEADERS_B)
-        # Should get 404, not the document
-        assert response.status_code == 404
+        tree = client.get("/api/v1/documents/tree", headers=HEADERS_B)
+        assert tree.status_code == 200
+        assert doc_a not in tree.text
+        assert "privileged-memo.pdf" not in tree.text
 
-    def test_user_cannot_delete_other_users_document(self, client: TestClient):
-        """User B should not be able to delete User A's document."""
-        response = client.delete("/api/v1/documents/fake-doc-id-from-user-a", headers=HEADERS_B)
-        # Should get 404 (not found for this user), not 200
-        assert response.status_code == 404
+    def test_other_user_cannot_get_metadata(self, client: TestClient, doc_a):
+        assert client.get(f"/api/v1/documents/{doc_a}", headers=HEADERS_B).status_code == 404
+
+    def test_other_user_cannot_read_content(self, client: TestClient, doc_a):
+        resp = client.get(f"/api/v1/documents/{doc_a}/content", headers=HEADERS_B)
+        assert resp.status_code == 404
+
+    def test_other_user_cannot_download_file(self, client: TestClient, doc_a):
+        resp = client.get(f"/api/v1/documents/{doc_a}/file", headers=HEADERS_B)
+        assert resp.status_code == 404
+
+    def test_other_user_cannot_move(self, client: TestClient, doc_a):
+        resp = client.post(
+            f"/api/v1/documents/{doc_a}/move", json={"folder_path": None}, headers=HEADERS_B
+        )
+        assert resp.status_code == 404
+
+    def test_other_user_cannot_delete(self, client: TestClient, doc_a):
+        resp = client.delete(f"/api/v1/documents/{doc_a}", headers=HEADERS_B)
+        assert resp.status_code == 404
+        # ...and the document is still there for its owner.
+        assert doc_a in document_service.documents
+        assert client.get(f"/api/v1/documents/{doc_a}", headers=HEADERS_A).status_code == 200
+
+
+@pytest.mark.usefixtures("no_rate_limit")
+class TestContractAnalysisIsolation:
+    """A stored contract analysis is visible to its owner only."""
+
+    @pytest.fixture
+    def analysis_a(self):
+        run_id = uuid.uuid4().hex
+        db_add(
+            ContractAnalysisRun(
+                id=run_id,
+                user_id=USER_A.id,
+                document_id="doc-of-a",
+                contract_type="nda",
+                document_length_chars=10,
+                summary={"issues": [], "redlines": [{"ref": "R1"}]},
+                is_complete=True,
+            )
+        )
+        return run_id
+
+    def test_owner_can_read(self, client: TestClient, analysis_a):
+        resp = client.get(f"/api/v1/contract-analysis/analyses/{analysis_a}", headers=HEADERS_A)
+        assert resp.status_code == 200
+
+    def test_other_user_cannot_list(self, client: TestClient, analysis_a):
+        resp = client.get("/api/v1/contract-analysis/analyses", headers=HEADERS_B)
+        assert resp.status_code == 200
+        assert analysis_a not in {a["analysis_id"] for a in resp.json()["analyses"]}
+
+    @pytest.mark.parametrize(
+        ("method", "suffix"),
+        [
+            ("get", ""),
+            ("get", "/export?format=md"),
+            ("get", "/redline-export"),
+            ("post", "/redline-export"),
+            ("delete", ""),
+        ],
+    )
+    def test_other_user_gets_404(self, client: TestClient, analysis_a, method, suffix):
+        url = f"/api/v1/contract-analysis/analyses/{analysis_a}{suffix}"
+        kwargs = {"json": {"exclude": [], "overrides": {}}} if method == "post" else {}
+        resp = getattr(client, method)(url, headers=HEADERS_B, **kwargs)
+        assert resp.status_code == 404
+        assert db_count(ContractAnalysisRun, ContractAnalysisRun.id == analysis_a) == 1
+
+
+@pytest.mark.usefixtures("no_rate_limit")
+class TestAuthorityMapIsolation:
+    """An authority-map run is visible to its owner only."""
+
+    @pytest.fixture
+    def run_a(self):
+        run_id = uuid.uuid4().hex
+        db_add(
+            AuthorityMapRun(id=run_id, user_id=USER_A.id, document_name="brief.docx"),
+            AuthorityMapping(run_id=run_id, proposition="P", source="courtlistener"),
+        )
+        return run_id
+
+    def test_owner_can_read(self, client: TestClient, run_a):
+        resp = client.get(f"/api/v1/authority-map/{run_a}", headers=HEADERS_A)
+        assert resp.status_code == 200
+        assert len(resp.json()["mappings"]) == 1
+
+    def test_other_user_cannot_read_or_delete(self, client: TestClient, run_a):
+        assert client.get(f"/api/v1/authority-map/{run_a}", headers=HEADERS_B).status_code == 404
+        assert client.delete(f"/api/v1/authority-map/{run_a}", headers=HEADERS_B).status_code == 404
+        assert db_count(AuthorityMapRun, AuthorityMapRun.id == run_a) == 1
+        assert db_count(AuthorityMapping, AuthorityMapping.run_id == run_a) == 1
+
+
+@pytest.mark.usefixtures("no_rate_limit")
+class TestWorkspaceSessionIsolation:
+    """A workspace-session snapshot is visible to its owner only."""
+
+    @pytest.fixture
+    def session_a(self):
+        # workspace_sessions.user_id has an FK to users, so the owner needs a row.
+        owner = make_user("ws-owner")
+        insert_db_user(owner)
+        session_id = str(uuid.uuid4())
+        db_add(
+            WorkspaceSessionDB(
+                id=session_id,
+                user_id=owner.id,
+                surface="contracts",
+                title="Privileged draft",
+                payload={"draft": "confidential"},
+            )
+        )
+        return owner, session_id
+
+    def test_owner_can_read(self, client: TestClient, session_a):
+        owner, session_id = session_a
+        resp = client.get(f"/api/v1/workspace-sessions/{session_id}", headers=headers(owner))
+        assert resp.status_code == 200
+        assert resp.json()["payload"] == {"draft": "confidential"}
+
+    def test_other_user_cannot_list_read_update_or_delete(self, client: TestClient, session_a):
+        _, session_id = session_a
+        url = f"/api/v1/workspace-sessions/{session_id}"
+
+        listed = client.get("/api/v1/workspace-sessions", headers=HEADERS_B)
+        assert listed.status_code == 200
+        assert session_id not in {s["id"] for s in listed.json()["sessions"]}
+
+        assert client.get(url, headers=HEADERS_B).status_code == 404
+        assert client.put(url, json={"title": "hijacked"}, headers=HEADERS_B).status_code == 404
+        assert client.delete(url, headers=HEADERS_B).status_code == 404
+        assert db_count(WorkspaceSessionDB, WorkspaceSessionDB.id == session_id) == 1
+
+
+@pytest.mark.usefixtures("no_rate_limit")
+class TestChatSessionIsolation:
+    """A chat session is visible to its owner only."""
+
+    def test_other_user_cannot_list_read_or_delete(self, client: TestClient):
+        created = client.post(
+            "/api/v1/chat/sessions", json={"title": "Privileged thread"}, headers=HEADERS_A
+        )
+        assert created.status_code == 200, created.text
+        session_id = created.json()["id"]
+        url = f"/api/v1/chat/sessions/{session_id}"
+
+        listed = client.get("/api/v1/chat/sessions", headers=HEADERS_B)
+        assert listed.status_code == 200
+        assert session_id not in {s["id"] for s in listed.json()["sessions"]}
+
+        assert client.get(url, headers=HEADERS_B).status_code == 404
+        assert client.delete(url, headers=HEADERS_B).status_code == 404
+        # Still there for its owner.
+        assert client.get(url, headers=HEADERS_A).status_code == 200
+
+
+@pytest.mark.usefixtures("no_rate_limit")
+class TestJobIsolation:
+    """A background job (and its result) is visible to its submitter only."""
+
+    def test_other_user_cannot_poll_list_or_cancel(self, client: TestClient):
+        job_id = f"job-{uuid.uuid4().hex}"
+        job = {
+            "job_id": job_id,
+            "user_id": USER_A.id,
+            "endpoint": "/contract-analysis/analyze",
+            "status": "completed",
+            "created_at": datetime.now(UTC).isoformat(),
+            "result": {"secret": "privileged"},
+        }
+
+        def _load(jid):
+            return job if jid == job_id else None
+
+        with (
+            patch.object(job_manager, "_load_job", side_effect=_load),
+            patch.object(job_manager, "_get_user_job_ids", return_value=[job_id]),
+        ):
+            mine = client.get(f"/api/v1/jobs/{job_id}", headers=HEADERS_A)
+            assert mine.status_code == 200
+            assert mine.json()["result"] == {"secret": "privileged"}
+
+            assert client.get(f"/api/v1/jobs/{job_id}", headers=HEADERS_B).status_code == 404
+            assert client.delete(f"/api/v1/jobs/{job_id}", headers=HEADERS_B).status_code == 404
+            listed = client.get("/api/v1/jobs", headers=HEADERS_B)
+            assert listed.status_code == 200
+            assert listed.json() == {"jobs": [], "count": 0}
 
 
 class TestSettingsIsolation:

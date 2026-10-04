@@ -16,6 +16,7 @@ import logging
 from openai import AsyncOpenAI, OpenAI
 
 from app.config import settings
+from app.services.provider_policy import enforce_openai_client
 
 logger = logging.getLogger(__name__)
 
@@ -123,8 +124,11 @@ async def openai_chat(client, **kwargs):
     """``chat.completions.create`` with automatic parameter negotiation.
 
     Every OpenAI chat call in the app goes through here so new models that
-    rename/reject parameters keep working everywhere at once.
+    rename/reject parameters keep working everywhere at once — and so the AI
+    provider allowlist is enforced in one place: the client's endpoint is
+    checked before anything is sent (ProviderNotAllowedError, a ValueError).
     """
+    enforce_openai_client(client)
     attempts = 0
     while True:
         try:
@@ -137,6 +141,7 @@ async def openai_chat(client, **kwargs):
 
 def openai_chat_sync(client, **kwargs):
     """Sync variant of :func:`openai_chat` for code running via ``to_thread``."""
+    enforce_openai_client(client)
     attempts = 0
     while True:
         try:

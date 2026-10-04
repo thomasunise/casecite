@@ -31,7 +31,7 @@ function MfaChallengeModal() {
           {mfaError && (
             <div className={s.errorBox}>{mfaError}</div>
           )}
-          <form onSubmit={e => { e.preventDefault(); handleMfaVerifySubmit(); }} className={s.formLayout}>
+          <form id={`${id}-form`} onSubmit={e => { e.preventDefault(); handleMfaVerifySubmit(); }} className={s.formLayout}>
             <div>
               <label htmlFor={`${id}-code`} className={s.formLabel}>Authentication code</label>
               <input
@@ -52,8 +52,8 @@ function MfaChallengeModal() {
           </p>
         </div>
         <div className={s.modalFooter}>
-          <button className={s.btnSecondary} onClick={cancelMfaChallenge}>Cancel</button>
-          <button className={s.btnPrimary} onClick={handleMfaVerifySubmit} disabled={mfaLoading || !mfaCode.trim()}>
+          <button type="button" className={s.btnSecondary} onClick={cancelMfaChallenge}>Cancel</button>
+          <button type="submit" form={`${id}-form`} className={s.btnPrimary} disabled={mfaLoading || !mfaCode.trim()}>
             {mfaLoading ? 'Verifying...' : 'Verify'}
           </button>
         </div>

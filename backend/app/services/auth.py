@@ -10,6 +10,7 @@ Supports:
 
 import json
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
@@ -45,6 +46,8 @@ class User(BaseModel):
     mfa_enabled: bool = False
     last_login: datetime | None = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # Mirrors users.token_version; embedded in tokens as the ``tv`` claim.
+    token_version: int = 0
 
 
 class TokenData(BaseModel):
@@ -55,6 +58,31 @@ class TokenData(BaseModel):
     iat: datetime
     jti: str  # JWT ID for revocation
     token_type: str = "access"  # "access" or "refresh"
+    session_id: str | None = None  # ``sid`` claim: the sign-in this token belongs to
+    token_version: int = 0  # ``tv`` claim: must equal users.token_version
+
+
+class AuthActionRequired(HTTPException):
+    """403 raised while an account must complete a step before using the API.
+
+    ``code`` is surfaced in the JSON error body (see error_handlers) so the
+    frontend can route to the right screen instead of showing a generic error:
+    ``password_change_required`` or ``mfa_enrollment_required``.
+    """
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(status_code=403, detail=detail)
+        self.code = code
+
+
+# Maximum lifetime of any token; revocation records are kept this long.
+_REVOCATION_TTL_SECONDS = 7 * 24 * 60 * 60
+# A rotated refresh token replayed within this window is treated as a benign
+# race (two tabs refreshing at once) and simply rejected; beyond it, replay
+# means the token was copied, and every session of the user is revoked.
+REFRESH_REUSE_GRACE_SECONDS = 10
+# Compact revoked_tokens.jsonl after this many appended lines.
+_REVOCATION_COMPACT_EVERY = 500
 
 
 class AuthService:
@@ -70,14 +98,24 @@ class AuthService:
         self.access_token_expire = timedelta(minutes=settings.access_token_expire_minutes)
         self.refresh_token_expire = timedelta(days=7)
 
-        # Token blacklist - use Redis in production for persistence
-        self._revoked_tokens = set()  # Fallback for development
-        # User-level tombstones: a deleted user's id is recorded here so any
-        # still-unexpired access token is rejected on EVERY worker (via Redis),
-        # even though the user's DB row — and its is_active check — is gone.
-        self._revoked_users = set()
+        # Revocation store. The process-local maps (restored from
+        # revoked_tokens.jsonl at startup, appended to on every revocation) are
+        # authoritative for this process; Redis is written as well and consulted
+        # in addition, never instead — so an evicted or flushed Redis key cannot
+        # bring a revoked token back to life.
+        # {jti: expiry epoch}
+        self._revoked_tokens: dict[str, float] = {}
+        # {jti: epoch the refresh token was rotated} — distinguishes "rotated,
+        # then replayed" (theft signal) from an ordinary logout revocation.
+        self._rotated_tokens: dict[str, float] = {}
+        # User-level tombstones {user_id: expiry epoch}: a deleted user's id is
+        # recorded here so any still-unexpired token is rejected even though the
+        # user's DB row — and its is_active check — is gone.
+        self._revoked_users: dict[str, float] = {}
         self._revocation_file = Path(settings.upload_dir).parent / "revoked_tokens.jsonl"
+        self._revocation_appends = 0
         self._load_revoked_tokens_from_file()
+        self._compact_revocation_file()
 
         if not settings.debug and not get_redis():
             logger.critical(
@@ -101,7 +139,7 @@ class AuthService:
         self._jwks_cache_ttl = 3600  # 1 hour
 
     def _load_revoked_tokens_from_file(self):
-        """Load unexpired revocations from file on startup."""
+        """Load unexpired token revocations and user tombstones on startup."""
         try:
             if not self._revocation_file.exists():
                 return
@@ -114,36 +152,96 @@ class AuthService:
                     try:
                         entry = json.loads(line)
                         expires_at = datetime.fromisoformat(entry["expires_at"])
-                        if expires_at > now:
-                            self._revoked_tokens.add(entry["jti"])
-                    except (json.JSONDecodeError, KeyError, ValueError):
+                        if expires_at <= now:
+                            continue
+                        if "user_id" in entry:
+                            self._revoked_users[entry["user_id"]] = expires_at.timestamp()
+                            continue
+                        self._revoked_tokens[entry["jti"]] = expires_at.timestamp()
+                        if entry.get("rotated_at") is not None:
+                            self._rotated_tokens[entry["jti"]] = float(entry["rotated_at"])
+                    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                         continue
-            logger.info(f"Loaded {len(self._revoked_tokens)} revoked tokens from file")
+            logger.info(
+                f"Loaded {len(self._revoked_tokens)} revoked tokens and "
+                f"{len(self._revoked_users)} user tombstones from file"
+            )
         except OSError as e:
             logger.warning(f"Could not load revoked tokens from file: {e}")
 
-    def _persist_revocation_to_file(self, jti: str):
-        """Write revocation to file as secondary backup."""
-        try:
-            import os
-            import stat
+    def _restrict_revocation_file(self):
+        """Owner-only permissions (0o600) on the revocation file."""
+        import os
+        import stat
 
-            expires_at = datetime.now(UTC) + timedelta(days=7)
-            entry = {"jti": jti, "expires_at": expires_at.isoformat()}
+        try:
+            os.chmod(self._revocation_file, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass  # Windows may not support chmod
+
+    def _append_revocation(self, entry: dict):
+        """Append one revocation record to the durable file."""
+        try:
             self._revocation_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self._revocation_file, "a") as f:
                 f.write(json.dumps(entry) + "\n")
-            # Restrict file permissions to owner only (0o600)
-            try:
-                os.chmod(self._revocation_file, stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass  # Windows may not support chmod
+            self._restrict_revocation_file()
         except OSError as e:
-            logger.error(f"Could not persist token revocation to file: {e}")
+            logger.error(f"Could not persist revocation to file: {e}")
+            return
+        self._revocation_appends += 1
+        if self._revocation_appends >= _REVOCATION_COMPACT_EVERY:
+            self._compact_revocation_file()
+
+    def _persist_revocation_to_file(self, jti: str, rotated_at: float | None = None):
+        """Write a token revocation to the durable file."""
+        expires_at = datetime.now(UTC) + timedelta(seconds=_REVOCATION_TTL_SECONDS)
+        entry: dict = {"jti": jti, "expires_at": expires_at.isoformat()}
+        if rotated_at is not None:
+            entry["rotated_at"] = rotated_at
+        self._append_revocation(entry)
+
+    def _compact_revocation_file(self):
+        """Drop expired entries from memory and rewrite the file with the live ones.
+
+        Every refresh and logout appends a line, and an expired revocation is
+        dead weight (the token it names can no longer verify), so without this
+        the file — and the in-memory maps — grow without bound.
+        """
+        now = time.time()
+        self._revoked_tokens = {j: e for j, e in self._revoked_tokens.items() if e > now}
+        self._rotated_tokens = {
+            j: t for j, t in self._rotated_tokens.items() if j in self._revoked_tokens
+        }
+        self._revoked_users = {u: e for u, e in self._revoked_users.items() if e > now}
+        self._revocation_appends = 0
+        if not self._revocation_file.exists():
+            return
+        try:
+            tmp = self._revocation_file.with_name(self._revocation_file.name + ".tmp")
+            with open(tmp, "w") as f:
+                for jti, exp in self._revoked_tokens.items():
+                    entry: dict = {
+                        "jti": jti,
+                        "expires_at": datetime.fromtimestamp(exp, tz=UTC).isoformat(),
+                    }
+                    if jti in self._rotated_tokens:
+                        entry["rotated_at"] = self._rotated_tokens[jti]
+                    f.write(json.dumps(entry) + "\n")
+                for user_id, exp in self._revoked_users.items():
+                    tombstone = {
+                        "user_id": user_id,
+                        "expires_at": datetime.fromtimestamp(exp, tz=UTC).isoformat(),
+                    }
+                    f.write(json.dumps(tombstone) + "\n")
+            tmp.replace(self._revocation_file)
+            self._restrict_revocation_file()
+        except OSError as e:
+            logger.warning(f"Could not compact revocation file: {e}")
 
     # ==================== JWT Token Management ====================
 
-    def create_access_token(self, user: User) -> str:
+    def create_access_token(self, user: User, session_id: str | None = None) -> str:
         """Create a new access token."""
         import uuid
 
@@ -158,11 +256,14 @@ class AuthService:
             "jti": str(uuid.uuid4()),
             "type": "access",
             "aud": "casecite",
+            "tv": user.token_version,
         }
+        if session_id:
+            payload["sid"] = session_id
         return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
 
-    def create_refresh_token(self, user: User) -> str:
-        """Create a new refresh token."""
+    def create_refresh_token(self, user: User, session_id: str | None = None) -> str:
+        """Create a new refresh token bound to the sign-in session ``session_id``."""
         import uuid
 
         now = datetime.now(UTC)
@@ -173,11 +274,19 @@ class AuthService:
             "jti": str(uuid.uuid4()),
             "type": "refresh",
             "aud": "casecite",
+            "tv": user.token_version,
         }
+        if session_id:
+            payload["sid"] = session_id
         return jwt.encode(payload, self.secret_key, algorithm=self.algorithm)
 
-    def verify_token(self, token: str) -> TokenData:
-        """Verify and decode a token."""
+    def verify_token(self, token: str, check_revocation: bool = True) -> TokenData:
+        """Verify and decode a token.
+
+        ``check_revocation=False`` is for /auth/refresh only, which must be able
+        to tell a rotated-and-replayed refresh token (see claim_refresh_token)
+        from an invalid one; every other caller rejects revoked tokens here.
+        """
         try:
             payload = jwt.decode(
                 token, self.secret_key, algorithms=[self.algorithm], audience="casecite"
@@ -185,7 +294,7 @@ class AuthService:
 
             # Check if token is revoked
             jti = payload.get("jti")
-            if self._is_token_revoked(jti):
+            if not jti or (check_revocation and self._is_token_revoked(jti)):
                 raise HTTPException(status_code=401, detail="Token has been revoked")
 
             return TokenData(
@@ -196,6 +305,8 @@ class AuthService:
                 iat=datetime.fromtimestamp(payload["iat"], tz=UTC),
                 jti=jti,
                 token_type=payload.get("type"),
+                session_id=payload.get("sid"),
+                token_version=int(payload.get("tv") or 0),
             )
         except JWTError as e:
             logger.debug(f"Token validation details: {e}")
@@ -203,55 +314,107 @@ class AuthService:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     def _is_token_revoked(self, jti: str) -> bool:
-        """Check if a token is revoked (Redis or in-memory)."""
+        """Check if a token is revoked (process-local store, then Redis)."""
         if not jti:
             return True  # Reject tokens with null/empty JTI
+
+        expiry = self._revoked_tokens.get(jti)
+        if expiry is not None and expiry > time.time():
+            return True
 
         redis_client = get_redis()
         if redis_client:
             try:
                 return bool(redis_client.exists(f"revoked_token:{jti}"))
             except (RedisError, ConnectionError, OSError):
-                # Fall back to in-memory on Redis errors
-                return jti in self._revoked_tokens
-        return jti in self._revoked_tokens
+                # The local store was already consulted above.
+                return False
+        return False
 
     def revoke_token(self, jti: str):
         """Revoke a token by its ID."""
         # Immediate in-memory revocation (closes race window where _is_token_revoked
         # checks Redis before the Redis write completes)
-        self._revoked_tokens.add(jti)
+        self._revoked_tokens[jti] = time.time() + _REVOCATION_TTL_SECONDS
 
-        # Persist to file as secondary backup
+        # Persist to file so the revocation survives a restart and a Redis flush
         self._persist_revocation_to_file(jti)
 
         # Persist to Redis for distributed deployments
         redis_client = get_redis()
         if redis_client:
             try:
-                redis_client.setex(
-                    f"revoked_token:{jti}",
-                    7 * 24 * 60 * 60,  # 7 days (max token lifetime)
-                    "1",
-                )
-            except (ConnectionError, TimeoutError, OSError, RuntimeError) as e:
+                redis_client.setex(f"revoked_token:{jti}", _REVOCATION_TTL_SECONDS, "1")
+            except (RedisError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
                 logger.warning(f"Redis revoke failed: {e}, in-memory revocation still active")
+
+    def claim_refresh_token(self, jti: str) -> str:
+        """Spend a refresh token for rotation: revoke it if (and only if) it is unspent.
+
+        Returns ``"ok"`` when this call spent the token, ``"revoked"`` when it
+        was already revoked by logout or was rotated moments ago (a benign
+        double-refresh race), and ``"reused"`` when a token rotated more than
+        REFRESH_REUSE_GRACE_SECONDS ago is presented again — the signal that a
+        copied refresh token is in use.
+
+        The local check-and-set has no await between check and write, and the
+        Redis write is a single SET NX, so two concurrent refreshes with the
+        same token cannot both succeed.
+        """
+        now = time.time()
+
+        def _classify(rotated_at: float | None) -> str:
+            if rotated_at is not None and now - rotated_at > REFRESH_REUSE_GRACE_SECONDS:
+                return "reused"
+            return "revoked"
+
+        expiry = self._revoked_tokens.get(jti)
+        if expiry is not None and expiry > now:
+            return _classify(self._rotated_tokens.get(jti))
+
+        redis_client = get_redis()
+        if redis_client:
+            key = f"revoked_token:{jti}"
+            try:
+                if not redis_client.set(key, f"rot:{now}", nx=True, ex=_REVOCATION_TTL_SECONDS):
+                    value = redis_client.get(key) or ""
+                    rotated_at = None
+                    if isinstance(value, str) and value.startswith("rot:"):
+                        try:
+                            rotated_at = float(value[4:])
+                        except ValueError:
+                            rotated_at = None
+                    return _classify(rotated_at)
+            except (RedisError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
+                logger.warning(f"Redis refresh-claim failed: {e}, using local revocation store")
+
+        self._revoked_tokens[jti] = now + _REVOCATION_TTL_SECONDS
+        self._rotated_tokens[jti] = now
+        self._persist_revocation_to_file(jti, rotated_at=now)
+        return "ok"
 
     def revoke_user(self, user_id: str):
         """Tombstone a deleted user so outstanding access tokens are rejected.
 
         A deleted user has no DB row, so get_current_user's is_active check no
-        longer fires; this tombstone (checked on every request, distributed via
-        Redis) rejects any of their still-unexpired tokens on all workers. TTL
-        matches the maximum token lifetime.
+        longer fires; this tombstone (checked on every request; kept in the
+        durable revocation file and in Redis) rejects any of their
+        still-unexpired tokens. TTL matches the maximum token lifetime.
         """
         if not user_id:
             return
-        self._revoked_users.add(user_id)
+        expires = time.time() + _REVOCATION_TTL_SECONDS
+        self._revoked_users[user_id] = expires
+        self._append_revocation(
+            {
+                "user_id": user_id,
+                "expires_at": datetime.fromtimestamp(expires, tz=UTC).isoformat(),
+            }
+        )
         redis_client = get_redis()
         if redis_client:
             try:
-                redis_client.setex(f"revoked_user:{user_id}", 7 * 24 * 60 * 60, "1")
+                redis_client.setex(f"revoked_user:{user_id}", _REVOCATION_TTL_SECONDS, "1")
             except (RedisError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
                 logger.warning(f"Redis user-revoke failed: {e}, in-memory tombstone still active")
 
@@ -259,13 +422,33 @@ class AuthService:
         """Whether a user has been tombstoned (deleted)."""
         if not user_id:
             return False
+        expiry = self._revoked_users.get(user_id)
+        if expiry is not None and expiry > time.time():
+            return True
         redis_client = get_redis()
         if redis_client:
             try:
                 return bool(redis_client.exists(f"revoked_user:{user_id}"))
             except (RedisError, ConnectionError, OSError):
-                return user_id in self._revoked_users
-        return user_id in self._revoked_users
+                return False
+        return False
+
+    def revoke_user_sessions(self, user_id: str) -> int:
+        """Revoke every live session of a user in this process; returns the count.
+
+        Revokes each session's current access-token JTI and drops the session
+        records. Because /auth/refresh requires a live session, this also stops
+        the user's refresh tokens from minting new access tokens. Callers that
+        need the invalidation to hold even if the session store is lost also
+        bump ``users.token_version``.
+        """
+        from app.middleware.security import session_manager
+
+        sessions = session_manager.get_active_sessions_raw(user_id)
+        for session in sessions:
+            self.revoke_token(session["jti"])
+        session_manager.terminate_all_sessions(user_id)
+        return len(sessions)
 
     # ==================== Azure AD Integration ====================
 
@@ -350,13 +533,17 @@ class AuthService:
             "tenant_id": payload.get("tid"),
         }
 
-    async def issue_azure_login(self, user: User, request: Request) -> dict:
+    async def issue_azure_login(
+        self, user: User, request: Request, session_id: str | None = None
+    ) -> dict:
         """Mint local tokens for an already-resolved SSO user and audit the login.
 
         ``user.roles`` must come from the database row, not from the token.
         """
-        access_token = self.create_access_token(user)
-        refresh_token = self.create_refresh_token(user)
+        from app.utils.ip_resolution import get_client_ip
+
+        access_token = self.create_access_token(user, session_id=session_id)
+        refresh_token = self.create_refresh_token(user, session_id=session_id)
 
         await audit_service.log_event(
             event_type=AuditEventType.LOGIN_SUCCESS,
@@ -367,7 +554,7 @@ class AuthService:
                 "tenant": user.tenant_id,
                 "roles": [r.value for r in user.roles],
             },
-            ip_address=request.client.host if request.client else None,
+            ip_address=get_client_ip(request),
             user_agent=request.headers.get("user-agent"),
         )
 
@@ -421,6 +608,33 @@ def _token_predates_password_change(token_iat: datetime, password_changed_at: da
     return iat_naive < (pwc - timedelta(seconds=5))
 
 
+# Paths (relative to the API prefix) that stay reachable while an account must
+# change its temporary password, and while it must enrol MFA (REQUIRE_MFA).
+_PASSWORD_CHANGE_ALLOWED_PATHS = frozenset(
+    {"/auth/change-password", "/auth/logout", "/auth/logout/all", "/auth/me"}
+)
+_MFA_ENROLLMENT_ALLOWED_PATHS = _PASSWORD_CHANGE_ALLOWED_PATHS | {
+    "/auth/mfa/status",
+    "/auth/mfa/setup",
+    "/auth/mfa/enable",
+}
+
+
+def _api_relative_path(request: Request) -> str:
+    path = request.url.path
+    prefix = settings.api_prefix
+    return path[len(prefix) :] if path.startswith(prefix) else path
+
+
+def mfa_enrollment_required(mfa_enabled: bool, has_password: bool) -> bool:
+    """Whether REQUIRE_MFA obliges this account to enrol before using the API.
+
+    SSO-only accounts (no local password) are exempt: their second factor is
+    the identity provider's policy.
+    """
+    return bool(settings.require_mfa and has_password and not mfa_enabled)
+
+
 async def get_current_user(
     request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> TokenData | None:
@@ -454,23 +668,37 @@ async def get_current_user(
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(DBUser.is_active, DBUser.password_changed_at).where(
-                DBUser.id == token_data.user_id
-            )
+            select(
+                DBUser.is_active,
+                DBUser.password_changed_at,
+                DBUser.token_version,
+                DBUser.must_change_password,
+                DBUser.mfa_enabled,
+                DBUser.password_hash,
+            ).where(DBUser.id == token_data.user_id)
         )
         row = result.one_or_none()
-        # If user not found in DB (e.g. demo user), skip the DB-backed checks.
-        if row is not None:
-            is_active, password_changed_at = row
-            if not is_active:
-                raise HTTPException(status_code=401, detail="Account disabled or deleted")
-            # Invalidate any token issued before the last password change, so a
-            # password reset immediately kills all outstanding access AND refresh
-            # tokens without needing to track individual JTIs.
-            if password_changed_at is not None and _token_predates_password_change(
-                token_data.iat, password_changed_at
-            ):
-                raise HTTPException(status_code=401, detail="Session expired, please sign in again")
+    # If user not found in DB (e.g. the DEBUG-only dev account), skip the
+    # DB-backed checks.
+    must_change_password = False
+    needs_mfa_enrollment = False
+    if row is not None:
+        is_active, password_changed_at, token_version, must_change, mfa_enabled, pw_hash = row
+        if not is_active:
+            raise HTTPException(status_code=401, detail="Account disabled or deleted")
+        # Invalidate any token issued before the last password change, so a
+        # password reset immediately kills all outstanding access AND refresh
+        # tokens without needing to track individual JTIs.
+        if password_changed_at is not None and _token_predates_password_change(
+            token_data.iat, password_changed_at
+        ):
+            raise HTTPException(status_code=401, detail="Session expired, please sign in again")
+        # "Log out everywhere" / admin force sign-out / refresh-token reuse bump
+        # users.token_version; a token minted under an older version is dead.
+        if token_data.token_version != int(token_version or 0):
+            raise HTTPException(status_code=401, detail="Session expired, please sign in again")
+        must_change_password = bool(must_change)
+        needs_mfa_enrollment = mfa_enrollment_required(bool(mfa_enabled), pw_hash is not None)
 
     # Enforce session validation.
     # IMPORTANT: resolve the client IP the same way create_session does
@@ -490,27 +718,21 @@ async def get_current_user(
     if not session_valid:
         raise HTTPException(status_code=401, detail="Session expired or invalid")
 
+    # An invited account still on its admin-issued temporary password may only
+    # change that password (or sign out) until it has done so.
+    relative_path = _api_relative_path(request)
+    if must_change_password and relative_path not in _PASSWORD_CHANGE_ALLOWED_PATHS:
+        raise AuthActionRequired(
+            "password_change_required",
+            "You must change your temporary password before continuing.",
+        )
+    if needs_mfa_enrollment and relative_path not in _MFA_ENROLLMENT_ALLOWED_PATHS:
+        raise AuthActionRequired(
+            "mfa_enrollment_required",
+            "Multi-factor authentication is required. Set up an authenticator app to continue.",
+        )
+
     return token_data
-
-
-async def get_current_user_optional(
-    request: Request, credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> TokenData | None:
-    """Get the current user if authenticated, None otherwise.
-
-    Delegates to ``get_current_user`` so a presented token receives the SAME
-    checks as mandatory auth (token type, tombstone/revocation, active-user,
-    password-change invalidation, session validation). A revoked or otherwise
-    invalid token yields None — it must never authenticate.
-    """
-    token = credentials.credentials if credentials else request.cookies.get("access_token")
-    if not token:
-        return None
-
-    try:
-        return await get_current_user(request, credentials)
-    except HTTPException:
-        return None
 
 
 def require_roles(*roles: UserRole):

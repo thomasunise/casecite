@@ -11,6 +11,7 @@ import type {
   ContractRedlineEdit,
 } from '../api/types';
 import { useUIStore } from './uiStore';
+import { createJobPoller, toast } from './storeUtils';
 import { persistWorkspaceSession, resetWorkspaceSessionKey } from './workspaceSessionsStore';
 import { registerReset } from './resetRegistry';
 import { downloadBlob } from '../utils/downloadBlob';
@@ -35,6 +36,8 @@ export interface ContractChatMessage {
   comparisonSet?: ContractComparisonSet;
   /** The stored analysis behind a redlines message — needed for export. */
   analysisId?: string;
+  /** answer: case references the server could not verify and removed. */
+  caseLawRemoved?: string[];
 }
 
 /** Flatten a contract message (structured kinds included) into export text. */
@@ -71,6 +74,9 @@ function contractMessageToExport(msg: ContractChatMessage): ConversationExportMe
   }
   if (msg.kind === 'clarify' && msg.options?.length) {
     parts.push(`Options offered: ${msg.options.join(' / ')}`);
+  }
+  if (msg.caseLawRemoved?.length) {
+    parts.push(`Case references removed because they could not be verified: ${msg.caseLawRemoved.join('; ')}`);
   }
   return {
     role: 'assistant',
@@ -131,6 +137,8 @@ export interface ContractsState {
   /** Auto-routed by default; 'redline' forces markup mode (the Redline chip). */
   sendMessage: (text: string, mode?: 'redline') => Promise<void>;
   openAnalysis: (id: string) => Promise<void>;
+  /** Ask, then permanently delete a stored analysis from the server. */
+  deleteAnalysis: (id: string) => void;
   exportAnalysis: (analysisId: string, format: 'docx' | 'md') => Promise<void>;
   setRedlineDecision: (analysisId: string, ref: string, decision: RedlineDecision) => void;
   exportRedlineDocx: (analysisId: string) => Promise<void>;
@@ -153,15 +161,11 @@ export interface ContractsState {
   jumpToComparisonClause: (comparison: ContractComparison, clauseIndex: number) => Promise<void>;
 }
 
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
+const jobPoller = createJobPoller();
 
 let messageSeq = 0;
 function nextMessageId(): string {
   return `cmsg-${Date.now()}-${++messageSeq}`;
-}
-
-function toast(msg: string, type = 'info') {
-  try { useUIStore.getState().addToast(msg, type); } catch { /* noop */ }
 }
 
 export const useContractsStore = create<ContractsState>((set, get) => {
@@ -282,35 +286,23 @@ export const useContractsStore = create<ContractsState>((set, get) => {
   // Poll a contract job (analysis, redlines, draft, or comparison) until it
   // settles, then inject the result into the chat as an assistant message.
   const pollContractJob = (jobId: string) => {
-    const poll = async (attempt: number) => {
-      try {
-        const job = await api.getContractJob(jobId);
-        if (job.status === 'completed') {
-          set({ analyzing: false, progressMessage: '' });
-          if (job.result) {
-            settleJobResult(job.result);
-          } else {
-            failChat('The job finished but returned no result.');
-          }
-          return;
-        }
-        if (job.status === 'failed' || job.status === 'cancelled') {
-          failChat(job.error || 'Contract analysis failed.');
-          return;
-        }
-        if (attempt > 150) {
-          failChat('Timed out waiting for results.');
-          return;
-        }
+    jobPoller.start({
+      fetchJob: () => api.getContractJob(jobId),
+      maxAttempts: 150,
+      failedMessage: 'Contract analysis failed.',
+      timeoutMessage: 'Timed out waiting for results.',
+      onCompleted: (job) => {
+        set({ analyzing: false, progressMessage: '' });
+        if (job.result) settleJobResult(job.result);
+        else failChat('The job finished but returned no result.');
+      },
+      onFailed: failChat,
+      onPending: (_job, attempt) => {
         if (attempt === 30) {
           set({ progressMessage: 'Still working — long contracts can take a couple of minutes…' });
         }
-        pollTimer = setTimeout(() => poll(attempt + 1), 2000);
-      } catch (e) {
-        failChat(e instanceof Error ? e.message : 'Polling failed.');
-      }
-    };
-    poll(0);
+      },
+    });
   };
 
   return {
@@ -371,7 +363,7 @@ export const useContractsStore = create<ContractsState>((set, get) => {
     // global — they are not tied to the selected document.
     setSelectedDocumentId: (id) => {
       if (id === get().selectedDocumentId) return;
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       // Switching contracts starts a new session in History too.
       resetWorkspaceSessionKey('contracts');
       const prevUrl = get().contractFileUrl;
@@ -531,7 +523,7 @@ export const useContractsStore = create<ContractsState>((set, get) => {
         toast('Select a contract to chat about first.', 'error');
         return;
       }
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       pushMessage({ role: 'user', kind: 'text', text: trimmed });
       set({ sending: true });
 
@@ -578,12 +570,32 @@ export const useContractsStore = create<ContractsState>((set, get) => {
             kind: 'answer',
             text: resp.answer,
             citations: resp.citations || [],
+            caseLawRemoved: resp.case_law_removed?.length ? resp.case_law_removed : undefined,
           });
         }
       } catch (e) {
         logger.error('contract chat failed', e);
         failChat(e instanceof Error ? e.message : 'Failed to send message.');
       }
+    },
+
+    deleteAnalysis: (id) => {
+      useUIStore.getState().showConfirm({
+        title: 'Delete this analysis?',
+        message: 'The stored analysis — its issues, quoted contract text, parties, obligations and any redlines — is permanently deleted from the server. The contract itself is not affected.',
+        type: 'danger',
+        confirmText: 'Delete analysis',
+        onConfirm: async () => {
+          try {
+            await api.deleteContractAnalysis(id);
+            set((st) => ({ analyses: st.analyses.filter((a) => a.analysis_id !== id) }));
+            toast('Analysis deleted.', 'success');
+          } catch (e) {
+            logger.error('contract analysis delete failed', e);
+            toast(e instanceof Error ? e.message : 'Could not delete the analysis.', 'error');
+          }
+        },
+      });
     },
 
     // Opening a past analysis injects it into the chat as an assistant message.
@@ -677,14 +689,14 @@ export const useContractsStore = create<ContractsState>((set, get) => {
     },
 
     clearConversation: () => {
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       set({ messages: [], sending: false, analyzing: false, progressMessage: '' });
       // A fresh conversation gets its own History row.
       resetWorkspaceSessionKey('contracts');
     },
 
     restoreWorkspaceSession: async (payload) => {
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       const prevUrl = get().contractFileUrl;
       if (prevUrl) URL.revokeObjectURL(prevUrl);
       const p = payload as {
@@ -792,7 +804,7 @@ export const useContractsStore = create<ContractsState>((set, get) => {
         toast('Open two or more contracts first (multi-select in the file picker).', 'error');
         return;
       }
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       const names = comparisonView.docs.map((d) => d.label).join(', ');
       pushMessage({
         role: 'user',
@@ -844,7 +856,7 @@ export const useContractsStore = create<ContractsState>((set, get) => {
 });
 
 registerReset(() => {
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  jobPoller.stop();
   const url = useContractsStore.getState().contractFileUrl;
   if (url) URL.revokeObjectURL(url);
   useContractsStore.setState(useContractsStore.getInitialState(), true);

@@ -99,3 +99,49 @@ class TestRenderDraftDocx:
         assert "Second paragraph." in paragraphs
         # The blank line between paragraphs survives as an empty paragraph.
         assert "" in paragraphs[1:]
+
+
+class TestDraftCaseLawGuard:
+    """A draft is model output: it may not introduce authority of its own."""
+
+    @pytest.mark.asyncio
+    async def test_invented_citation_is_removed_and_reported(self):
+        payload = {
+            "title": "Motion",
+            "text": "ARGUMENT\n\nSee Madeup v. Imaginary, 999 F.3d 1. Relief is warranted.",
+        }
+        result = await draft_document(_client_returning(json.dumps(payload)), "Draft a motion")
+        assert "Madeup" not in result["text"]
+        assert "[unverified case-law reference removed]" in result["text"]
+        assert "Relief is warranted." in result["text"]
+        assert len(result["case_law_removed"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_case_named_in_the_instructions_is_kept(self):
+        payload = {"title": "Motion", "text": "As held in Smith v. Jones, notice is required."}
+        result = await draft_document(
+            _client_returning(json.dumps(payload)),
+            "Draft a motion relying on Smith v. Jones",
+        )
+        assert result["text"] == payload["text"]
+        assert result["case_law_removed"] == []
+
+    @pytest.mark.asyncio
+    async def test_case_in_the_reference_document_or_current_draft_is_kept(self):
+        payload = {"title": "Brief", "text": "Under Roe v. Wade, 410 U.S. 113, the rule applies."}
+        client = _client_returning(json.dumps(payload))
+        from_reference = await draft_document(
+            client, "Draft a brief", reference_text="Our memo discusses Roe v. Wade, 410 U.S. 113."
+        )
+        assert from_reference["case_law_removed"] == []
+        from_draft = await draft_document(
+            client, "Tighten the prose", revision_of="Under Roe v. Wade, 410 U.S. 113, it applies."
+        )
+        assert from_draft["case_law_removed"] == []
+
+    @pytest.mark.asyncio
+    async def test_contract_draft_without_case_references_is_untouched(self):
+        payload = {"title": "NDA", "text": "1. CONFIDENTIALITY\n\nEach party shall keep it secret."}
+        result = await draft_document(_client_returning(json.dumps(payload)), "Draft an NDA")
+        assert result["text"] == payload["text"]
+        assert result["case_law_removed"] == []

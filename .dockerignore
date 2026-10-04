@@ -31,9 +31,10 @@
 **/data/
 **/*.db
 
-# Documentation
+# Documentation (NOTICE.md and LICENSE ship in the image: the licence terms
+# and third-party notices must travel with a distributed copy)
 **/*.md
-LICENSE
+!NOTICE.md
 
 # CI/CD
 .github
@@ -42,6 +43,13 @@ LICENSE
 # Docker
 docker-compose*.yml
 Dockerfile.*
+
+# Backups (database dumps and data archives; never part of a build context)
+backups/
+**/*.sql
+**/*.sql.gz*
+**/*.tar.gz*
+**/*.enc
 
 # Secrets — any depth
 **/*.pem

@@ -1,5 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
+import { api } from '../../../api';
 import { useMfaStore } from '../../../stores/mfaStore';
+import { useAuthStore } from '../../../stores/authStore';
+import { useUIStore } from '../../../stores/uiStore';
+import { parseUtcDate } from '../../../utils';
+import type { SessionInfo } from '../../../api/types';
 import { Icon } from '../../shared/Icon';
 import t from './SecurityTab.module.css';
 
@@ -12,11 +17,40 @@ export function SecurityTab({ s }: SecurityTabProps) {
     enabled, recoveryCodesRemaining, loading,
     setup, qrDataUrl, enrollCode, setEnrollCode,
     freshRecoveryCodes, dismissRecoveryCodes,
-    manageCode, setManageCode,
+    manageCode, setManageCode, managePassword, setManagePassword,
     loadStatus, beginSetup, cancelSetup, confirmEnable, disable, regenerateCodes,
   } = useMfaStore();
+  const enrollmentRequired = useAuthStore((st) => !!st.user?.mfa_enrollment_required);
+  const setShowChangePassword = useAuthStore((st) => st.setShowChangePassword);
+  const handleLogoutEverywhere = useAuthStore((st) => st.handleLogoutEverywhere);
+  const { setShowSettings, showConfirm } = useUIStore();
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
+  const loadSessions = useCallback(async () => {
+    try {
+      setSessions((await api.getSessions()).sessions);
+    } catch {
+      setSessions(null);
+    }
+  }, []);
+
+  useEffect(() => { loadStatus(); loadSessions(); }, [loadStatus, loadSessions]);
+
+  const openChangePassword = () => {
+    // One dialog at a time: the password form replaces Settings.
+    setShowSettings(false);
+    setShowChangePassword(true);
+  };
+
+  const confirmSignOutEverywhere = () => {
+    showConfirm({
+      title: 'Sign out everywhere?',
+      message: 'Every session for your account is ended on all devices, including this one. You will need to sign in again.',
+      type: 'warning',
+      confirmText: 'Sign out everywhere',
+      onConfirm: () => { setShowSettings(false); handleLogoutEverywhere(); },
+    });
+  };
 
   const downloadCodes = () => {
     if (!freshRecoveryCodes) return;
@@ -39,6 +73,53 @@ export function SecurityTab({ s }: SecurityTabProps) {
 
   return (
     <div className={s.tabPanel}>
+      {/* Password */}
+      <div className={t.managePanel}>
+        <div className={t.manageHeading}>Password</div>
+        <p className={t.manageNote}>
+          Changing your password signs you out on every device; you then sign in again with the new one.
+        </p>
+        <div className={t.enrollActions}>
+          <button className={t.btnGhost} onClick={openChangePassword}>
+            <Icon name="KeyRound" size={14} /> Change password
+          </button>
+        </div>
+      </div>
+
+      {/* Sessions */}
+      <div className={t.managePanel}>
+        <div className={t.manageHeading}>Active sessions</div>
+        {sessions === null ? (
+          <p className={t.manageNote}>Could not load your sessions.</p>
+        ) : sessions.length === 0 ? (
+          <p className={t.manageNote}>No active sessions were reported.</p>
+        ) : (
+          <ul className={t.sessionList}>
+            {sessions.map((session, i) => (
+              <li key={`${session.created_at}-${i}`} className={t.sessionRow}>
+                <span>Signed in {parseUtcDate(session.created_at).toLocaleString()}</span>
+                <span className={t.sessionMeta}>
+                  last active {parseUtcDate(session.last_activity).toLocaleString()} · {session.ip_address || 'unknown address'}
+                  {session.expires_at && ` · ends ${parseUtcDate(session.expires_at).toLocaleString()}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className={t.enrollActions}>
+          <button className={t.btnDanger} onClick={confirmSignOutEverywhere}>
+            <Icon name="LogOut" size={14} /> Sign out everywhere
+          </button>
+        </div>
+      </div>
+
+      {enrollmentRequired && !enabled && (
+        <div className={t.warnBox} role="alert">
+          <Icon name="AlertTriangle" size={14} />
+          Your firm requires two-factor authentication. Set it up below to keep using your account.
+        </div>
+      )}
+
       <p className={t.intro}>
         Two-factor authentication protects your account with a time-based code from an
         authenticator app (1Password, Google Authenticator, Authy, Microsoft Authenticator)
@@ -146,8 +227,8 @@ export function SecurityTab({ s }: SecurityTabProps) {
         <div className={t.managePanel}>
           <div className={t.manageHeading}>Manage</div>
           <p className={t.manageNote}>
-            Both actions require a current code from your authenticator app.
-            Disabling also accepts a recovery code.
+            Both actions require a current code from your authenticator app. Disabling also
+            needs your account password, and accepts a recovery code in place of the app code.
           </p>
           <div className={t.enrollActions}>
             <input
@@ -167,6 +248,15 @@ export function SecurityTab({ s }: SecurityTabProps) {
             >
               <Icon name="RefreshCw" size={14} /> New recovery codes
             </button>
+            <input
+              aria-label="Account password (needed to disable two-factor)"
+              type="password"
+              className={t.codeInput}
+              value={managePassword}
+              onChange={(e) => setManagePassword(e.target.value)}
+              placeholder="Password (to disable)"
+              autoComplete="current-password"
+            />
             <button
               className={t.btnDanger}
               onClick={disable}

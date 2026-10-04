@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
+from app import __version__
 from app.config import settings
 from app.database import close_db as close_sqlalchemy_db
 from app.database import init_db as init_sqlalchemy_db
@@ -211,9 +212,23 @@ async def lifespan(app: FastAPI):
     logger.info("Ensuring database tables exist (backstop; migrations run at startup)...")
     await init_sqlalchemy_db()
 
+    # SQLite (development only) never runs Alembic, and create_all cannot add a
+    # column to an existing table — add any model columns a dev database lacks.
+    try:
+        from app.database import IS_SQLITE, async_engine
+        from app.models.db_models import Base as _Base
+        from app.utils.sqlite_columns import add_missing_sqlite_columns
+
+        if IS_SQLITE:
+            async with async_engine.begin() as _conn:
+                await _conn.run_sync(add_missing_sqlite_columns, _Base.metadata)
+    except Exception as _col_err:
+        logger.error(f"SQLite column backstop failed: {_col_err}")
+
     # Ensure there is always at least one admin. On installs created before the
-    # "first user is admin" rule, the earliest account is promoted so admin-only
-    # settings (Users, integrations) are reachable.
+    # "first user is admin" rule, the earliest ACTIVE account is promoted so
+    # admin-only settings (Users, integrations) are reachable. A deactivated
+    # account is never promoted: it was switched off deliberately.
     try:
         from sqlalchemy import select
 
@@ -227,11 +242,19 @@ async def lifespan(app: FastAPI):
                 .all()
             )
             has_admin = any(isinstance(u.roles, list) and "admin" in u.roles for u in users)
-            if users and not has_admin:
-                oldest = users[0]
+            active_users = [u for u in users if u.is_active]
+            if active_users and not has_admin:
+                oldest = active_users[0]
                 oldest.roles = ["admin"]
                 await _admin_session.commit()
-                logger.info(f"Promoted earliest user {oldest.email} to admin (no admin existed).")
+                logger.info("Promoted earliest active user to admin (no admin existed).")
+            if not users and not settings.debug and not settings.registration_bootstrap_token:
+                logger.critical(
+                    "No user accounts exist and REGISTRATION_BOOTSTRAP_TOKEN is not set: "
+                    "the first (admin) registration is refused until it is. Set "
+                    "REGISTRATION_BOOTSTRAP_TOKEN (openssl rand -hex 24), restart, and "
+                    "supply it as bootstrap_token when registering the first account."
+                )
     except Exception as _admin_err:
         logger.warning(f"Could not ensure an admin user exists: {_admin_err}")
 
@@ -318,11 +341,15 @@ app = FastAPI(
     - Tamper-evident (HMAC-chained) audit trail
 
     ## Authentication
-    All endpoints except /health, /ready, and /auth/* require a bearer token.
+    Every endpoint requires a bearer token (or the session cookie) except:
+    /health and /ready (probes; detail is admin-only), GET /api/v1/branding,
+    GET /api/v1/csrf-token, the OAuth callback under /api/v1/connectors, and
+    the sign-in endpoints under /api/v1/auth (login, register, refresh,
+    password reset, MFA verify). /metrics requires an admin.
     Obtain one from POST /auth/login (email + password, optional TOTP MFA);
     an Azure AD SSO exchange is available at POST /auth/azure/login.
     """,
-    version="1.0.0",
+    version=__version__,
     lifespan=lifespan,
     openapi_url="/openapi.json" if settings.debug else None,
     docs_url="/docs" if settings.debug else None,

@@ -1,4 +1,5 @@
 import { Icon } from './Icon';
+import { safeHttpUrl } from './safeUrl';
 
 interface DocketDocument {
   description?: string;
@@ -139,7 +140,7 @@ function DocketDetailView({ s, docket, docketLoading, onBack }: DocketDetailView
                       {docs.length > 0 && (
                         <span className={s.resultRowMeta}>
                           {docs.map((d, j) => (
-                            <a key={j} href={d.url!} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
+                            <a key={j} href={safeHttpUrl(d.url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
                               <Icon name="FileText" size={11} /> {d.description || `Document ${d.document_number ?? j + 1}`}
                               {d.page_count ? ` (${d.page_count} pp.)` : ''}
                             </a>
@@ -164,7 +165,7 @@ function DocketDetailView({ s, docket, docketLoading, onBack }: DocketDetailView
           </div>
 
           {docket.url && (
-            <a href={docket.url} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
+            <a href={safeHttpUrl(docket.url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.oralArgLink}>
               <Icon name="ExternalLink" size={12} /> View on CourtListener
             </a>
           )}

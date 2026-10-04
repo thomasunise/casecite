@@ -1,4 +1,5 @@
 import { useEffect, useCallback } from 'react';
+import { ANALYSIS_MODES } from '../constants/analysisModes';
 
 /**
  * Centralized keyboard shortcuts hook for the CaseCite platform.
@@ -11,7 +12,10 @@ import { useEffect, useCallback } from 'react';
  * @param {Function} options.setShowShortcutsHelp - Show/hide the shortcuts help overlay
  * @param {boolean}  options.showShortcutsHelp - Current shortcuts help visibility
  * @param {Function} options.closeAllModals - Function to close any open modal/panel
- * @param {string[]} options.modeIds - Ordered array of mode IDs for Ctrl+1-8 switching
+ * @param {string[]} options.modeIds - Ordered array of mode IDs for Ctrl+Shift+<n> switching
+ *
+ * Only combinations the browser does not already own are bound: Ctrl+P
+ * (print) and Ctrl+1-8 (switch browser tab) are deliberately left alone.
  */
 export function useKeyboardShortcuts({
   setActiveMode,
@@ -82,18 +86,16 @@ export function useKeyboardShortcuts({
       return;
     }
 
-    // Ctrl/Cmd + P - Print current view
-    if (e.key === 'p' || e.key === 'P') {
-      e.preventDefault();
-      window.print();
-      return;
-    }
-
-    // Ctrl/Cmd + 1-8 - Switch between modes
-    const num = parseInt(e.key, 10);
-    if (num >= 1 && num <= 8 && num <= modeIds.length) {
-      e.preventDefault();
-      setActiveMode(modeIds[num - 1]);
+    // Ctrl/Cmd + Shift + <n> - Switch between modes. Shift keeps this clear of
+    // the browser's own Ctrl+<n> tab switching; `code` is used because Shift
+    // changes `key` to the symbol on that digit.
+    const digit = /^Digit([1-9])$/.exec(e.code);
+    if (e.shiftKey && digit) {
+      const num = parseInt(digit[1], 10);
+      if (num <= modeIds.length) {
+        e.preventDefault();
+        setActiveMode(modeIds[num - 1]);
+      }
       return;
     }
   }, [
@@ -118,10 +120,9 @@ export function useKeyboardShortcuts({
  */
 export const SHORTCUTS_LIST = [
   { keys: ['Ctrl', 'K'], description: 'Focus search input' },
-  { keys: ['Ctrl', '1-8'], description: 'Switch analysis mode' },
+  { keys: ['Ctrl', 'Shift', `1-${ANALYSIS_MODES.length}`], description: 'Switch analysis mode' },
   { keys: ['Ctrl', 'B'], description: 'Toggle left sidebar' },
   { keys: ['Ctrl', '.'], description: 'Toggle right panel' },
-  { keys: ['Ctrl', 'P'], description: 'Print current view' },
   { keys: ['?'], description: 'Show keyboard shortcuts' },
   { keys: ['Esc'], description: 'Close modal / panel' },
 ];

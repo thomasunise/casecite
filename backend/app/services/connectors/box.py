@@ -1,13 +1,13 @@
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
 from app.services import connector_credentials
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 
 class BoxConnector(BaseConnector):
@@ -89,12 +89,12 @@ class BoxConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
     async def get_account_info(self) -> dict[str, Any]:
         """Get Box account information."""
@@ -121,7 +121,7 @@ class BoxConnector(BaseConnector):
 
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"https://api.box.com/2.0/folders/{folder_id}/items",
+                f"https://api.box.com/2.0/folders/{quote(folder_id, safe='')}/items",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
                 params={"fields": "id,name,type,size,modified_at", "limit": 100, "offset": offset},
             )
@@ -177,12 +177,14 @@ class BoxConnector(BaseConnector):
         await self._ensure_valid_token()
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
-                f"https://api.box.com/2.0/files/{file_id}/content",
+            # Box 302s to a CDN host; httpx drops the Authorization header on
+            # the cross-origin hop, so the token only ever reaches api.box.com.
+            return await self._download_capped(
+                client,
+                "GET",
+                f"https://api.box.com/2.0/files/{quote(file_id, safe='')}/content",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
             )
-            response.raise_for_status()
-            return response.content
 
     async def get_downscoped_token(
         self, scopes: str = "base_picker item_download root_readonly"

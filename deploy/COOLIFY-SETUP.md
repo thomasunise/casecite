@@ -1,224 +1,193 @@
 # Deploy CaseCite on Coolify
 
-## The 10-Minute Guide
+Coolify builds the unified image (frontend + backend in one container) from the
+root `docker-compose.yml` and puts its own Traefik proxy, with TLS, in front of
+it. This guide uses the **Docker Compose** build pack on purpose: that compose
+file declares the persistent volume for `/app/data`. Deploying the bare
+`Dockerfile` instead gives the container an anonymous volume that is replaced on
+every redeploy — uploads, the vector index, the audit log and the stored API
+keys would be lost each time.
+
+What you need before you start:
+
+- A server running Coolify, and a DNS A record for the hostname you will use
+  (e.g. `app.yourfirm.com`) pointing at it.
+- The server's disk encrypted (LUKS or the provider's encrypted disk). CaseCite
+  stores vector chunks, chat history and extracted text in cleartext and will
+  not start until you confirm the disks under the app volume, PostgreSQL and
+  Redis are encrypted.
+- Optionally an AI provider key. Without a server-level key, each user saves
+  their own under Settings.
 
 ---
 
-## STEP 1: Push Code to GitHub (3 min)
+## Step 1: Put the code where Coolify can read it
 
-### If you don't have Git installed:
-Download from: https://git-scm.com/downloads
+Either point Coolify at `https://github.com/thomasunise/casecite` directly, or
+fork it (a private fork is fine for your own deployment under the license) and
+connect the fork through **Sources → GitHub App**.
 
-### Push your code:
-
-1. Open **PowerShell** (Windows) or **Terminal** (Mac)
-
-2. Go to your project folder:
-```
-cd path\to\casecite
-```
-
-3. Create a GitHub repo at https://github.com/new
-   - Name: `casecite`
-   - Your fork can be **private** (fine for your own deployment under the source-available license)
-   - Click **Create repository**
-
-4. Push your code (copy these one at a time):
-```
-git init
-git add .
-git commit -m "first commit"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/casecite.git
-git push -u origin main
-```
-
-✅ **Done!** Your code is on GitHub.
+Do not `git add .` a working directory that contains a `.env`, a `backups/`
+directory or a `data/` directory. The repository's `.gitignore` excludes them;
+keep it that way.
 
 ---
 
-## STEP 2: Open Coolify (30 sec)
+## Step 2: Create PostgreSQL and Redis
 
-1. Open your browser
-2. Go to your Coolify dashboard: `http://YOUR_HETZNER_IP:8000`
-3. Log in
+The compose file does not include a database or Redis. In your Coolify project:
 
----
+1. **+ New Resource → Database → PostgreSQL 16.** Note the internal connection
+   URL Coolify shows.
+2. **+ New Resource → Database → Redis 7.** Set a password. In its custom
+   configuration set:
 
-## STEP 3: Connect GitHub (2 min)
+   ```
+   maxmemory-policy noeviction
+   ```
 
-1. Click **⚙️ Settings** (bottom left)
-2. Click **Sources**
-3. Click **+ Add New**
-4. Click **GitHub App**
-5. Click **Register Now** button
-6. GitHub opens → Click **Install**
-7. Pick **"Only select repositories"**
-8. Choose your `casecite` repo
-9. Click **Install**
-10. You're back in Coolify → Click **Save**
+   Redis holds revoked-token markers, account-lockout counters and consumed MFA
+   challenges. An LRU eviction policy drops them under memory pressure, which
+   revives logged-out sessions and resets lockouts.
 
-✅ **Done!** GitHub is connected.
+Both must be on the same Docker network as the app (Coolify's default project
+network works) and must not be published to the internet.
 
 ---
 
-## STEP 4: Create Your App (2 min)
+## Step 3: Create the app
 
-1. Click **Projects** (left menu)
-2. Click **+ Add**
-3. Name: `CaseCite`
-4. Click **Save**
-5. Click on your new project
-6. Click **+ New Resource**
-7. Click **Public Repository** or **Private Repository (with GitHub App)**
-8. Pick your `casecite` repo
+1. **+ New Resource → Public Repository** (or **Private Repository (with GitHub
+   App)** for a fork) and pick the repository.
+2. Build settings:
 
-### Configure Build Settings:
+   | Setting | Value |
+   |---|---|
+   | Build Pack | **Docker Compose** |
+   | Docker Compose Location | `/docker-compose.yml` |
 
+3. Save. Coolify lists the `app` service and its `casecite_data` volume — that
+   volume is the persistent storage for `/app/data`. Confirm it appears under
+   **Storages** before you deploy.
+
+---
+
+## Step 4: Environment variables
+
+Generate the secrets **once**, locally, and keep a copy in a password manager.
+They are not in any backup, and losing `SECRET_KEY` or `ENCRYPTION_SALT` makes
+every uploaded document and stored API key unreadable.
+
+```bash
+openssl rand -hex 32   # SECRET_KEY
+openssl rand -hex 32   # AUDIT_HMAC_KEY
+openssl rand -hex 16   # ENCRYPTION_SALT
+openssl rand -hex 16   # REGISTRATION_BOOTSTRAP_TOKEN
 ```
-┌────────────────────────────────────────────┐
-│                                            │
-│  Build Pack:     Dockerfile               │
-│                                            │
-│  Dockerfile:     /Dockerfile              │
-│                                            │
-│  Port:           80                        │
-│                                            │
-└────────────────────────────────────────────┘
-```
 
-9. Click **Save**
-
----
-
-## STEP 5: Add Your Settings (1 min)
-
-1. Click **Environment Variables** tab
-2. Click **Add** for each one:
+Add these under **Environment Variables**. All are required; the app fails
+closed on startup if one is missing or left as a placeholder.
 
 | Variable | Value |
 |----------|-------|
-| `OPENAI_API_KEY` | `sk-your-key-here` |
-| `SECRET_KEY` | output of `openssl rand -hex 32` (must be ≥ 32 chars) |
-| `ENCRYPTION_SALT` | output of `openssl rand -hex 16` (never change after first run) |
-| `AUDIT_HMAC_KEY` | output of `openssl rand -hex 32` |
-| `DATABASE_URL` | `postgresql+asyncpg://user:pass@host:5432/casecite` |
-| `REDIS_URL` | `redis://:password@host:6379/0` |
-| `CORS_ORIGINS` | `https://your-domain.com` |
-| `ALLOWED_HOSTS` | `your-domain.com` |
-| `TRUSTED_PROXIES` | your proxy's Docker subnet (e.g. `10.0.0.0/8`) — **required behind Traefik** |
+| `SECRET_KEY` | generated above (never change after first run) |
+| `ENCRYPTION_SALT` | generated above (never change after first run) |
+| `AUDIT_HMAC_KEY` | generated above |
+| `REGISTRATION_BOOTSTRAP_TOKEN` | generated above — needed to create the first (admin) account |
+| `DATABASE_URL` | `postgresql+asyncpg://user:pass@<postgres-host>:5432/<db>` (from Step 2; note the `+asyncpg`) |
+| `DB_SSL` | `internal` for the Coolify-managed Postgres on the private Docker network; `require` for a database reached over a network |
+| `REDIS_URL` | `redis://:password@<redis-host>:6379/0` (from Step 2) |
+| `CORS_ORIGINS` | `https://app.yourfirm.com` |
+| `ALLOWED_HOSTS` | `app.yourfirm.com` |
+| `TRUSTED_PROXIES` | the Docker subnet Coolify's proxy connects from — find it with `docker network inspect coolify -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'` |
+| `DISK_ENCRYPTION_ACKNOWLEDGED` | `true`, once the server disk (app volume, Postgres, Redis) is encrypted |
 
-Generate the three secrets locally first:
+Optional:
+
+| Variable | Value |
+|----------|-------|
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | a server-level provider key shared by all users |
+| `COURTLISTENER_API_TOKEN` | free token; needed for citation check and usable rate limits on case-law tools |
+| `FRONTEND_URL` | `https://app.yourfirm.com` — used in password-reset emails |
+| `SENDGRID_API_KEY` | enables password-reset emails |
+
+`TRUSTED_PROXIES` matters: if the proxy's address is not trusted, every user
+appears to come from one IP, so one person's failed logins lock out the whole
+firm.
+
+---
+
+## Step 5: Domain and deploy
+
+1. On the `app` service set the domain to `https://app.yourfirm.com` (port 80).
+   Coolify issues the certificate.
+2. Click **Deploy** and watch the log. The container reports healthy once
+   database migrations have run and `GET /health` answers — allow a couple of
+   minutes on the first deploy.
+3. Open `https://app.yourfirm.com/health`. It should return
+   `{"status": "healthy", ...}`.
+
+---
+
+## Step 6: Create the admin account
+
+The first account becomes the admin, and in production it can only be created
+with the bootstrap token from Step 4:
 
 ```bash
-openssl rand -hex 32   # SECRET_KEY and AUDIT_HMAC_KEY (run twice)
-openssl rand -hex 16   # ENCRYPTION_SALT
+DOMAIN=app.yourfirm.com
+CSRF=$(curl -s -c /tmp/casecite.jar "https://$DOMAIN/api/v1/csrf-token" \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')
+curl -s -b /tmp/casecite.jar -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"email": "you@yourfirm.com", "name": "Your Name",
+       "password": "<12+ chars, upper, lower, number, symbol>",
+       "bootstrap_token": "<REGISTRATION_BOOTSTRAP_TOKEN>"}' \
+  "https://$DOMAIN/api/v1/auth/register"
+rm /tmp/casecite.jar
 ```
 
-The app fails closed on startup if any required secret is missing or left as a placeholder.
-
-### Where to get OpenAI key:
-1. Go to https://platform.openai.com/api-keys
-2. Click **Create new secret key**
-3. Copy it
+Sign in, enrol MFA, then invite colleagues from Settings → Users.
 
 ---
 
-## STEP 6: Set Your Domain (1 min)
+## Backups
 
-1. Click **Settings** tab (or **Domain** tab)
-2. Enter your domain (the same host you put in `CORS_ORIGINS` / `ALLOWED_HOSTS`):
-```
-app.yourdomain.com
-```
-3. Turn ON **Generate SSL Certificate** ✅
-4. Click **Save**
-
-### Don't forget DNS!
-In your domain provider (GoDaddy, Namecheap, Cloudflare):
-```
-Type:  A
-Name:  app
-Value: YOUR_HETZNER_IP
-```
+Coolify's own database backups cover PostgreSQL only. The `casecite_data`
+volume (uploaded documents, vector index, audit log, key store) must be backed
+up as well, from the same point in time — see "Backups" in
+[docs/deployment.md](../docs/deployment.md) (`BACKUP_MODE=direct` with
+`DATA_VOLUME=<the casecite_data volume name>`).
 
 ---
 
-## STEP 7: Deploy! 🚀 (5 min)
+## Troubleshooting
 
-1. Click the big **Deploy** button
-2. Watch the logs (it shows what's happening)
-3. Wait for green checkmark ✅
+**Container restarts or never turns healthy** — open the app's logs. Startup
+names the missing or placeholder setting (`SECRET_KEY`, `AUDIT_HMAC_KEY`,
+`ENCRYPTION_SALT`, `REDIS_URL`, `DATABASE_URL`, `CORS_ORIGINS`,
+`DISK_ENCRYPTION_ACKNOWLEDGED`).
 
----
+**"Invalid host header"** — `ALLOWED_HOSTS` does not match the hostname in the
+browser.
 
-## Deployment Complete
+**Everyone is rate-limited or locked out together** — `TRUSTED_PROXIES` does
+not cover the proxy's address.
 
-Open: **https://app.yourdomain.com**
+**Signed in, but the session does not stick** — the app must see the original
+`https` scheme. Coolify's proxy sends `X-Forwarded-Proto`, and the in-container
+nginx passes it through; check that nothing between the browser and Coolify
+terminates TLS without forwarding that header.
 
-You should see the CaseCite login page.
+**Site loads but AI answers fail** — no provider key is configured (server
+level or under the user's Settings), or the key is invalid.
 
----
-
-## What to Do Next
-
-1. **Register the first account** - it becomes the admin (set `REGISTRATION_BOOTSTRAP_TOKEN` first if the instance is already reachable)
-2. **Upload documents** - Click Documents → Upload
-3. **Test a query** - Ask it a legal question
-
----
-
-## Quick Fixes
-
-### ❌ "502 Bad Gateway"
-→ Click **Restart** in Coolify, wait 2 min
-
-### ❌ "Page not found"
-→ Check domain spelling in Coolify settings
-
-### ❌ "Build failed"
-→ Check you added OPENAI_API_KEY in environment variables
-
-### ❌ Site loads but no AI response
-→ Your OpenAI key might be wrong or expired
-
-### ❌ DNS not working
-→ Wait 15 min, DNS can be slow
+**Data disappeared after a redeploy** — the app was deployed with the
+Dockerfile build pack instead of Docker Compose (Step 3), so `/app/data` was
+not on a persistent volume.
 
 ---
 
-## Commands Cheat Sheet
+## Updating
 
-### Update your site after making changes:
-```
-git add .
-git commit -m "updated something"
-git push
-```
-Then click **Deploy** in Coolify (or it auto-deploys).
-
-### Check if it's working:
-Visit: `https://app.yourdomain.com/health`
-Should say: `{"status": "healthy"}`
-
----
-
-## Repository Files
-
-```
-CaseCite
-├── Dockerfile         ← Coolify builds this (frontend + backend in one image)
-├── start.sh           ← Container entrypoint
-├── nginx.unified.conf ← In-container web server config
-├── frontend/          ← React SPA (built during the image build)
-└── backend/
-    └── app/           ← FastAPI application
-```
-
----
-
-## Need Help?
-
-1. **Coolify Docs**: https://coolify.io/docs
-2. **OpenAI Status**: https://status.openai.com
-3. **Check Logs**: Coolify → Your Project → Logs tab
+Push to the repository (or pull upstream into your fork) and redeploy from
+Coolify. Migrations run automatically at container start. Take a backup first.

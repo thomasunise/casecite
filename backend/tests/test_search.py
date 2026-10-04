@@ -57,13 +57,10 @@ class TestQueryParser:
         assert "contract" in result.required_terms
 
     def test_boolean_or(self):
-        result = self.parser.parse("breach OR negligence")
-        # The tokenizer consumes OR and sets operator on tokens,
-        # but the categorization loop uses its own state tracking,
-        # so both terms end up as required terms in current implementation.
-        assert "breach" in result.required_terms
-        assert "negligence" in result.required_terms
-        # Verify the token-level operator is captured
+        result = self.parser.parse("breach OR negligence damages")
+        # Both sides of an explicit OR are optional; the rest stays required.
+        assert result.optional_terms == ["breach", "negligence"]
+        assert result.required_terms == ["damages"]
         neg_token = next(t for t in result.tokens if t.value == "negligence")
         assert neg_token.operator == BooleanOperator.OR
 
@@ -116,9 +113,64 @@ class TestQueryParser:
         assert "equal" in semantic
         assert "protection" in semantic
 
-    def test_get_keyword_query(self):
-        result = self.parser.parse("test query")
-        assert result.get_keyword_query() == "test query"
+    # --- Plain English must never be parsed as Boolean -------------------
+
+    def test_lowercase_not_is_an_ordinary_word(self):
+        """Regression: "is not paid" used to exclude every chunk containing "paid"."""
+        query = "What happens if rent is not paid on time?"
+        result = self.parser.parse(query)
+        assert result.excluded_terms == []
+        assert "paid" in result.required_terms
+        # The text sent for embedding is the question exactly as typed.
+        assert result.get_semantic_query() == query
+
+    def test_lowercase_and_or_are_ordinary_words(self):
+        query = "termination or cancellation and notice periods"
+        result = self.parser.parse(query)
+        assert result.optional_terms == []
+        assert result.excluded_terms == []
+        assert result.get_semantic_query() == query
+
+    def test_all_caps_message_is_not_boolean(self):
+        result = self.parser.parse("WHAT IS NOT COVERED BY THE POLICY")
+        assert result.excluded_terms == []
+        assert result.get_semantic_query() == "WHAT IS NOT COVERED BY THE POLICY"
+
+    def test_hyphenated_words_and_bare_dashes_are_not_exclusions(self):
+        query = "non-compete clause - what does it say about a -5% adjustment?"
+        result = self.parser.parse(query)
+        assert result.excluded_terms == []
+        assert result.get_semantic_query() == query
+
+    def test_unknown_word_colon_value_tokens_are_kept(self):
+        """Only known filter fields are parsed out; everything else is text."""
+        query = "At 10:30 see Section 3:Termination re:Smith https://example.com/a"
+        result = self.parser.parse(query)
+        assert result.field_queries == {}
+        assert result.get_semantic_query() == query
+
+    def test_stop_words_stay_in_the_semantic_query(self):
+        query = "Is the tenant in breach of the lease?"
+        assert self.parser.parse(query).get_semantic_query() == query
+
+    def test_explicit_operators_are_removed_from_the_semantic_query(self):
+        result = self.parser.parse("indemnification NOT insurance")
+        assert result.excluded_terms == ["insurance"]
+        assert result.get_semantic_query() == "indemnification"
+
+        result = self.parser.parse("lease -sublease court:9th")
+        assert result.excluded_terms == ["sublease"]
+        assert result.get_semantic_query() == "lease"
+
+    def test_excluded_terms_filter_only_fires_on_explicit_syntax(self):
+        """The chunk that answers a "not paid" question must survive filtering."""
+        service = SearchService()
+        chunk = {"text": "Rent must be paid on the first of each month.", "metadata": {}}
+        parsed = service.parse_query("What happens if rent is not paid on time?")
+        assert service.apply_filters([chunk], parsed) == [chunk]
+
+        parsed = service.parse_query("rent NOT paid")
+        assert service.apply_filters([chunk], parsed) == []
 
     def test_parse_date_formats(self):
         # YYYY-MM-DD
@@ -330,7 +382,42 @@ class TestSearchService:
 
 
 class TestHybridSearcher:
-    """Tests for HybridSearcher."""
+    """Tests for HybridSearcher (BM25 rescoring of vector candidates)."""
+
+    @pytest.mark.asyncio
+    async def test_keyword_match_is_promoted_within_the_candidates(self):
+        with patch("app.services.search.settings") as mock_settings:
+            mock_settings.keyword_weight = 0.5
+            mock_settings.top_k = 10
+            mock_settings.rerank_enabled = False
+
+            searcher = HybridSearcher()
+            candidates = [
+                {"id": "a", "text": "general payment terms and invoices", "similarity": 0.62},
+                {
+                    "id": "b",
+                    "text": "indemnification obligations of the vendor",
+                    "similarity": 0.60,
+                },
+            ]
+            results = await searcher.search("indemnification", candidates, rerank=False)
+            assert [r["id"] for r in results] == ["b", "a"]
+            assert results[0]["keyword_score"] == 1.0
+            assert results[1]["keyword_score"] == 0
+
+    @pytest.mark.asyncio
+    async def test_respects_requested_top_k(self):
+        with patch("app.services.search.settings") as mock_settings:
+            mock_settings.keyword_weight = 0.3
+            mock_settings.top_k = 2
+            mock_settings.rerank_enabled = False
+
+            searcher = HybridSearcher()
+            candidates = [
+                {"id": f"d{i}", "text": f"clause {i}", "similarity": 0.9 - i * 0.1}
+                for i in range(5)
+            ]
+            assert len(await searcher.search("clause", candidates, top_k=4, rerank=False)) == 4
 
     @pytest.mark.asyncio
     async def test_falls_back_to_semantic_when_not_indexed(self):

@@ -11,7 +11,19 @@ Enforceability values:
     void         — unenforceable as drafted
     reformable   — court may blue-pencil to make enforceable
     unsettled    — law unclear; flag for attorney review
+
+These rules are a drafting aid, not legal advice, and law changes. Every rule
+carries ``as_of`` (when this data was compiled) and says so in its note.
+
+Numbers appear in ``constraints`` only where a statute sets them. Where courts
+apply a reasonableness standard with no statutory figure, the constraint says
+so in words — a made-up cap would read as a bright line that does not exist.
+Statutory figures that the statute itself adjusts over time are listed under
+``verify_current_figures`` and must be checked before use.
 """
+
+# When this data was compiled. It has not been re-verified since.
+RULES_AS_OF = "2024"
 
 JURISDICTION_RULES: list[dict] = [
     # =========================================================================
@@ -73,7 +85,7 @@ JURISDICTION_RULES: list[dict] = [
         "jurisdiction": "TX",
         "enforceability": "limited",
         "constraints": {
-            "max_duration_months": 24,
+            "duration": "reasonable — no statutory cap",
             "geographic_scope": "reasonable",
             "scope_must_match_consideration": True,
             "ancillary_to_otherwise_enforceable_agreement": True,
@@ -93,13 +105,14 @@ JURISDICTION_RULES: list[dict] = [
         "jurisdiction": "FL",
         "enforceability": "enforceable",
         "constraints": {
-            "max_duration_months_employee": 24,
-            "max_duration_months_sale": 84,
+            "presumed_reasonable_up_to_months_employee": 6,
+            "presumed_unreasonable_over_months_employee": 24,
+            "presumed_unreasonable_over_months_sale": 84,
+            "presumptions_are_rebuttable": True,
             "blue_pencil_allowed": True,
-            "presumption_of_reasonableness_under_6mo": True,
         },
         "authorities": [{"type": "statute", "cite": "Fla. Stat. § 542.335"}],
-        "note": "Florida is one of the most employer-friendly states; statute provides presumptions of reasonableness and authorizes modification.",
+        "note": "Florida is one of the most employer-friendly states; the statute sets rebuttable presumptions of reasonableness by duration (not hard caps) and authorizes modification.",
     },
     {
         "canonical_slug": "non_compete",
@@ -122,11 +135,16 @@ JURISDICTION_RULES: list[dict] = [
         "constraints": {
             "min_annual_earnings_employee": 120559,
             "min_annual_earnings_contractor": 301399,
-            "max_duration_months": 18,
+            "earnings_thresholds_year": 2024,
+            "verify_current_figures": [
+                "min_annual_earnings_employee",
+                "min_annual_earnings_contractor",
+            ],
+            "presumed_unreasonable_over_months": 18,
             "advance_disclosure_required": True,
         },
         "authorities": [{"type": "statute", "cite": "Wash. Rev. Code § 49.62"}],
-        "note": "Washington requires earnings thresholds (annually adjusted), advance disclosure, and limits duration to 18 months.",
+        "note": "Washington requires earnings thresholds, advance disclosure, and presumes a duration over 18 months unreasonable. The earnings thresholds are adjusted every year; the figures recorded here are the 2024 amounts — verify the current figure.",
     },
     {
         "canonical_slug": "non_compete",
@@ -134,19 +152,20 @@ JURISDICTION_RULES: list[dict] = [
         "enforceability": "limited",
         "constraints": {
             "min_annual_earnings": 75000,
+            "verify_current_figures": ["min_annual_earnings"],
             "consideration_period_years": 2,
             "advance_notice_days": 14,
             "blue_pencil_allowed": True,
         },
         "authorities": [{"type": "statute", "cite": "Illinois Freedom to Work Act, 820 ILCS 90"}],
-        "note": "Illinois requires income threshold ($75k for non-compete), 14 days advance review, and either continued employment for 2+ years or other adequate consideration.",
+        "note": "Illinois requires an income threshold for non-competes ($75k when the Act took effect; the statute raises it on a schedule — verify the current figure), 14 days advance review, and either continued employment for 2+ years or other adequate consideration.",
     },
     {
         "canonical_slug": "non_compete",
         "jurisdiction": "DE",
         "enforceability": "limited",
         "constraints": {
-            "max_duration_months": 24,
+            "duration": "reasonable — no statutory cap",
             "blue_pencil_allowed": True,
             "geographic_scope": "reasonable",
         },
@@ -163,7 +182,7 @@ JURISDICTION_RULES: list[dict] = [
         "jurisdiction": "NY",
         "enforceability": "limited",
         "constraints": {
-            "max_duration_months": 12,
+            "duration": "reasonable — no statutory cap",
             "legitimate_business_interest_required": True,
             "no_undue_hardship_on_employee": True,
             "blue_pencil_allowed": True,
@@ -200,7 +219,10 @@ JURISDICTION_RULES: list[dict] = [
         "canonical_slug": "non_solicit",
         "jurisdiction": "TX",
         "enforceability": "enforceable",
-        "constraints": {"max_duration_months": 24, "blue_pencil_allowed": True},
+        "constraints": {
+            "duration": "reasonable — no statutory cap",
+            "blue_pencil_allowed": True,
+        },
         "authorities": [{"type": "statute", "cite": "Tex. Bus. & Com. Code § 15.50"}],
         "note": "Texas treats non-solicits like non-competes — must be reasonable and ancillary.",
     },
@@ -361,3 +383,12 @@ JURISDICTION_RULES: list[dict] = [
         "note": "Delaware enforces choice-of-Delaware-law in commercial contracts of $100k+ even without minimum contacts.",
     },
 ]
+
+# Stamp every rule with when it was compiled, in the structured data and in the
+# note (the note is what a reviewer actually reads in a finding).
+for _rule in JURISDICTION_RULES:
+    _rule["as_of"] = RULES_AS_OF
+    _rule["constraints"] = {**_rule.get("constraints", {}), "as_of": RULES_AS_OF}
+    _rule["note"] = (
+        f"{_rule['note'].rstrip()} (Compiled {RULES_AS_OF}; verify current law before relying on it.)"
+    )

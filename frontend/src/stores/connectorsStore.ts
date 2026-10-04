@@ -2,8 +2,10 @@ import { create } from 'zustand';
 import { registerReset } from './resetRegistry';
 import { api } from '../api';
 import logger from '../utils/logger';
+import { isAllowedOAuthUrl } from '../utils/oauthOrigins';
 import { useUIStore } from './uiStore';
 import { usePickerStore } from './pickerStore';
+import { useAuthStore } from './authStore';
 import type { Connector, PickerConfig, PickerFile } from '../types';
 
 const DEFAULT_CONNECTORS = [
@@ -17,21 +19,28 @@ const DEFAULT_CONNECTORS = [
   { id: 'dropbox', name: 'Dropbox', icon: 'Droplet', color: '#0061FF', connected: false, docs: 0 },
 ];
 
-// OAuth origins a connector auth_url may legitimately point at.
-const ALLOWED_OAUTH_ORIGINS = [
-  'https://accounts.google.com',
-  'https://login.microsoftonline.com',
-  'https://app.box.com',
-  'https://account.box.com',
-  'https://www.dropbox.com',
-  'https://vault.netvoyage.com',
-  'https://cloudimanage.com',
-  'https://app.clio.com',
-  'https://eu.app.clio.com',
-];
-
 const SYNC_POLL_INTERVAL_MS = 3000;
 const SYNC_POLL_MAX_MS = 15 * 60 * 1000;
+const OAUTH_POPUP_POLL_MS = 1000;
+const OAUTH_POPUP_MAX_MS = 10 * 60 * 1000;
+
+function isCurrentUserAdmin(): boolean {
+  const user = useAuthStore.getState().user;
+  return (user?.roles ?? []).includes('admin') || user?.role === 'admin';
+}
+
+/** Resolve once the OAuth popup has been closed (or the wait budget runs out). */
+function waitForPopupClose(popup: Window): Promise<void> {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (popup.closed || Date.now() - startedAt > OAUTH_POPUP_MAX_MS) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, OAUTH_POPUP_POLL_MS);
+  });
+}
 
 export interface ConnectorsState {
   connectors: Connector[];
@@ -44,8 +53,6 @@ export interface ConnectorsState {
   setPickerLoading: (val: boolean) => void;
   activePickerProvider: string | null;
   setActivePickerProvider: (val: string | null) => void;
-  showProvidersModal: boolean;
-  setShowProvidersModal: (val: boolean) => void;
 
   hasPickerSupport: (connectorId: string) => boolean;
   handlePickerFilesSelected: (files: PickerFile[], provider: string) => Promise<void>;
@@ -69,8 +76,6 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
   })),
   pickerConfig: null,
   setPickerConfig: (val) => set({ pickerConfig: val }),
-  showProvidersModal: false,
-  setShowProvidersModal: (val) => set({ showProvidersModal: val }),
 
   // ── Picker state (delegates to pickerStore) ───────────────────────
   showPickerModal: false,
@@ -106,6 +111,11 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
     const { addToast, showConfirm } = useUIStore.getState();
     const { hasPickerSupport } = get();
 
+    if (connector.adminOnly && !isCurrentUserAdmin()) {
+      addToast(`${connector.name} uses a firm-wide credential, so only an administrator can connect or sync it.`, 'info');
+      return;
+    }
+
     if (connector.configured === false) {
       addToast(`${connector.name} is not configured yet. An administrator needs to set up OAuth credentials for this connector in the server environment.`, 'error');
       return;
@@ -118,17 +128,28 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
         type: 'info',
         confirmText: 'Sync Now',
         cancelText: 'Disconnect',
-        onConfirm: async () => {
-          try {
-            const result = await api.syncConnector(connector.id);
-            addToast(`Syncing ${connector.name}...`, 'info');
-            if (result.sync_id) {
-              get().pollSyncStatus(connector, result.sync_id);
-            }
-          } catch (error: unknown) {
-            const message = error instanceof Error ? error.message : String(error);
-            addToast(`Sync failed: ${message}`, 'error');
-          }
+        onConfirm: () => {
+          // A sync has no folder chooser, so it can only cover the whole
+          // account — which is never started without saying so first.
+          showConfirm({
+            title: `Import the entire ${connector.name} account?`,
+            message: `Every document this ${connector.name} account can reach will be downloaded and indexed — not one folder or matter. The text of each document is sent to your configured embedding provider. To bring in specific files instead, cancel and use the file picker where one is offered.`,
+            type: 'warning',
+            confirmText: 'Import entire account',
+            cancelText: 'Cancel',
+            onConfirm: async () => {
+              try {
+                const result = await api.syncConnector(connector.id, { sync_all: true });
+                addToast(`Syncing ${connector.name}...`, 'info');
+                if (result.sync_id) {
+                  get().pollSyncStatus(connector, result.sync_id);
+                }
+              } catch (error: unknown) {
+                const message = error instanceof Error ? error.message : String(error);
+                addToast(`Sync failed: ${message}`, 'error');
+              }
+            },
+          });
         },
         onCancel: () => {
           showConfirm({
@@ -159,9 +180,17 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
       } else {
         try {
           const result = await api.connectConnector(connector.id);
-          if (result.auth_url && ALLOWED_OAUTH_ORIGINS.some((o: string) => result.auth_url!.startsWith(o))) {
-            window.open(result.auth_url, '_blank', 'width=600,height=700');
-            addToast('Complete authentication in the popup window, then refresh.', 'info');
+          if (isAllowedOAuthUrl(result.auth_url)) {
+            const popup = window.open(result.auth_url, '_blank', 'width=600,height=700');
+            if (!popup) {
+              addToast('Popup blocked — please allow popups for this site and try again.', 'error');
+              return;
+            }
+            addToast('Complete authentication in the popup window.', 'info');
+            // The connection only exists once the provider has redirected back
+            // to the server — check after the popup closes, not before the
+            // user has had a chance to sign in.
+            await waitForPopupClose(popup);
             const status = await api.getConnectorStatus(connector.id);
             if (status.connected) {
               set((state) => ({
@@ -169,7 +198,12 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
                   c.id === connector.id ? { ...c, connected: true, docs: status.docs_indexed || 0 } : c
                 ),
               }));
+              addToast(`${connector.name} connected.`, 'success');
+            } else {
+              addToast(`${connector.name} was not connected. Try again when you are ready.`, 'info');
             }
+          } else if (result.auth_url) {
+            addToast(`${connector.name} returned an unexpected sign-in address, so it was not opened.`, 'error');
           } else if (result.connected) {
             set((state) => ({
               connectors: state.connectors.map((c) =>
@@ -232,7 +266,7 @@ export const useConnectorsStore = create<ConnectorsState>((set, get) => ({
           connectors: state.connectors.map((c) => {
             const sc = connectorData.connectors.find((sc) => sc.id === c.id);
             if (sc) {
-              return { ...c, connected: sc.connected || false, configured: sc.configured !== false, docs: sc.docs_indexed || 0 };
+              return { ...c, connected: sc.connected || false, configured: sc.configured !== false, adminOnly: sc.admin_only === true, docs: sc.docs_indexed || 0 };
             }
             return c;
           }),

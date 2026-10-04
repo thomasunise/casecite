@@ -20,7 +20,6 @@ from app.services.legal_tools._helpers import (
     citation_dict_to_string,
     nested_snippet,
     order_citations,
-    preferred_citation,
     strip_marks,
 )
 from app.services.legal_tools.service import LegalToolsService
@@ -29,11 +28,11 @@ from app.services.legal_tools.service import LegalToolsService
 class TestHelpers:
     def test_official_reporter_first(self):
         cites = ["173 L. Ed. 2d 868", "129 S. Ct. 1937", "556 U.S. 662", "2009 U.S. LEXIS 3472"]
-        assert preferred_citation(cites) == "556 U.S. 662"
+        assert order_citations(cites)[0] == "556 U.S. 662"
         assert order_citations(cites)[:2] == ["556 U.S. 662", "129 S. Ct. 1937"]
 
     def test_federal_reporter_over_appendix(self):
-        assert preferred_citation(["12 F. App'x 34", "37 F.4th 1098"]) == "37 F.4th 1098"
+        assert order_citations(["12 F. App'x 34", "37 F.4th 1098"])[0] == "37 F.4th 1098"
 
     def test_nested_snippet_and_marks(self):
         result = {"opinions": [{"snippet": "Sup. Ct. <mark>Ariz</mark>.\n Certiorari  denied"}]}

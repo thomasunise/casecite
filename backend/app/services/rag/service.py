@@ -43,7 +43,6 @@ from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE
 from app.services.rag.prompts import get_default_grounding_rules, get_system_prompt
 from app.services.rag.search import (
     SearchUnavailableError,
-    get_document_chunks_directly,
     search_case_law,
     search_documents,
 )
@@ -95,31 +94,48 @@ def _sanitize_prompt_input(text: str, max_length: int = 100_000) -> str:
     return text
 
 
-def _enforce_hipaa_provider_check(model: str) -> None:
-    """If HIPAA enforcement is enabled, verify the model's provider is approved."""
-    if not settings.hipaa_enforcement_enabled:
-        return
-    if not settings.approved_ai_providers:
-        raise ValueError(
-            "HIPAA enforcement is enabled but no approved_ai_providers configured. "
-            "Set APPROVED_AI_PROVIDERS to allow LLM usage."
+def describe_llm_failure(error: Exception) -> str:
+    """One user-readable sentence for a failed LLM call (no upstream payloads)."""
+    if isinstance(error, ValueError):
+        # Raised by call_llm / the provider allowlist with a message written
+        # for the user (no key configured, provider not approved, ...).
+        return str(error)
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    name = type(error).__name__
+    if status in (401, 403) or "Authentication" in name or "PermissionDenied" in name:
+        return (
+            "The AI provider rejected the API key. Check the key in Settings "
+            "(or the server's provider key if you run the instance)."
         )
-    provider = None
-    model_lower = (model or "").lower()
-    if "gpt" in model_lower or "o1" in model_lower or "o3" in model_lower:
-        provider = "openai"
-    elif "claude" in model_lower:
-        provider = "anthropic"
-    elif "gemini" in model_lower:
-        provider = "google"
-    else:
-        provider = "unknown"
-    approved_lower = [p.lower() for p in settings.approved_ai_providers]
-    if provider not in approved_lower:
-        raise ValueError(
-            f"HIPAA enforcement: AI provider '{provider}' (model '{model}') is not in "
-            f"approved providers list: {settings.approved_ai_providers}"
+    if status == 429 or "RateLimit" in name:
+        return (
+            "The AI provider is rate-limiting requests or the account is out of "
+            "quota. Wait a moment and try again."
         )
+    if isinstance(error, TimeoutError) or "Timeout" in name:
+        return "The AI provider took too long to respond. Try again."
+    if status == 404 or "NotFound" in name:
+        return (
+            "The AI provider does not recognise the selected model. Choose a "
+            "different model in Settings."
+        )
+    if isinstance(status, int) and status >= 500:
+        return f"The AI provider reported an internal error (HTTP {status}). Try again shortly."
+    return f"The request to the AI provider failed ({name}). Try again."
+
+
+class VectorWriteError(RuntimeError):
+    """Replacing a document's vectors failed at the store.
+
+    ``vectors_removed`` says whether the old vectors are already gone (the
+    document is no longer searchable) or the store was left as it was.
+    """
+
+    def __init__(self, message: str, vectors_removed: bool):
+        super().__init__(message)
+        self.vectors_removed = vectors_removed
 
 
 class RAGService:
@@ -143,7 +159,7 @@ class RAGService:
             else None
         )
 
-    async def index_document(
+    async def _build_chunk_documents(
         self,
         document_id: str,
         text: str,
@@ -155,13 +171,17 @@ class RAGService:
         folder_path: str = None,
         user_id: str = "",
         matter_id: str | None = None,
-    ) -> int:
-        """Index a document by chunking and embedding it."""
+    ) -> list[dict[str, Any]]:
+        """Chunk and embed a document; returns the records to store (may be empty).
+
+        This is the step that can fail on a provider error. It writes nothing,
+        so callers can finish it before touching what is already stored.
+        """
         if self.vector_db is None:
             raise RuntimeError("Vector database not available. Check DB configuration and logs.")
         chunks = embedding_service.chunk_text(text)
         if not chunks:
-            return 0
+            return []
 
         chunk_texts = [c["text"] for c in chunks]
         embeddings = await embedding_service.embed_texts(chunk_texts, user_keys=user_keys)
@@ -202,11 +222,71 @@ class RAGService:
             }
             # Only tag matter_id when set — the vector store rejects None-valued
             # metadata, and an untagged chunk stays owner-scoped (by user_id).
+            # Assigned after the metadata spread for the same reason as user_id:
+            # a connector's own "matter_id" metadata is not an access-control tag.
+            chunk_doc.pop("matter_id", None)
             if matter_id:
                 chunk_doc["matter_id"] = matter_id
             documents.append(chunk_doc)
+        return documents
 
+    async def index_document(
+        self,
+        document_id: str,
+        text: str,
+        filename: str,
+        source: str = "local",
+        doc_type: str = "document",
+        metadata: dict[str, Any] = None,
+        user_keys: Optional["UserAPIKeys"] = None,
+        folder_path: str = None,
+        user_id: str = "",
+        matter_id: str | None = None,
+    ) -> int:
+        """Index a document by chunking and embedding it."""
+        documents = await self._build_chunk_documents(
+            document_id=document_id,
+            text=text,
+            filename=filename,
+            source=source,
+            doc_type=doc_type,
+            metadata=metadata,
+            user_keys=user_keys,
+            folder_path=folder_path,
+            user_id=user_id,
+            matter_id=matter_id,
+        )
+        if not documents:
+            return 0
         await self.vector_db.add_documents(documents)
+        return len(documents)
+
+    async def replace_document(self, document_id: str, **index_kwargs) -> int:
+        """Re-index a document, replacing its stored chunks.
+
+        Takes the same arguments as :meth:`index_document`. The new chunks are
+        embedded FIRST; the existing vectors are deleted only once that has
+        succeeded, so a provider failure leaves the document searchable as it
+        was. Raises if embedding fails (nothing changed) or if the store write
+        fails after the old vectors were removed (the document then has no
+        vectors and must be marked failed by the caller).
+        """
+        documents = await self._build_chunk_documents(document_id=document_id, **index_kwargs)
+        if not documents:
+            raise ValueError("no text to index")
+        if not await self.vector_db.delete_by_document(document_id):
+            raise VectorWriteError(
+                "could not remove the existing vectors; the document was left unchanged",
+                vectors_removed=False,
+            )
+        try:
+            await self.vector_db.add_documents(documents)
+        except Exception as e:  # store errors share no base class
+            raise VectorWriteError(
+                f"storing the re-embedded chunks failed ({type(e).__name__}); "
+                "the document currently has no vectors",
+                vectors_removed=True,
+            ) from e
         return len(documents)
 
     async def search(
@@ -262,21 +342,46 @@ class RAGService:
         anthropic_client = None
         gemini_model = None
 
+        # Resolve effective per-user settings up front so the model choice and
+        # retrieval toggles apply to every code path below (including no-results).
+        effective_settings = rag_settings if rag_settings else RAGSettings()
+        model = model or effective_settings.llm_model or settings.openai_chat_model
+
         if user_keys:
             openai_client = user_keys.get_async_openai_client()
             anthropic_client = user_keys.get_async_anthropic_client()
-            if user_keys.has_google():
-                gemini_model = user_keys.get_google_model()
+            if user_keys.google:
+                # The Gemini model the user selected, not a fixed default.
+                gemini_model = user_keys.get_google_model(
+                    model if "gemini" in model.lower() else None
+                )
 
         if not openai_client:
             openai_client = self.openai
         if not anthropic_client:
             anthropic_client = self.anthropic
 
-        # Resolve effective per-user settings up front so the model choice and
-        # retrieval toggles apply to every code path below (including no-results).
-        effective_settings = rag_settings if rag_settings else RAGSettings()
-        model = model or effective_settings.llm_model or settings.openai_chat_model
+        # A scope (selected files / folder) that resolved to no indexed
+        # documents is answered as exactly that. It must never widen to the
+        # whole knowledge base: the user asked about Client A's folder, and
+        # an answer drawn from Client B's files would be wrong and unseen.
+        if include_documents and document_ids is not None and not document_ids:
+            return {
+                "content": (
+                    "There are no indexed documents in the scope you selected, so "
+                    "there was nothing to search. The folder or files may be empty, "
+                    "or still being indexed — check their status in the knowledge "
+                    "base, or widen the scope and ask again."
+                ),
+                "citations": [],
+                "stats": ChatStats(
+                    docs_searched=0,
+                    chunks_retrieved=0,
+                    processing_time=f"{time.time() - start_time:.2f}s",
+                    case_law_searched=0,
+                    case_law_included=0,
+                ),
+            }
 
         # Search for relevant documents. Infrastructure failures surface as an
         # honest "search is down" answer — never as "no relevant documents".
@@ -354,18 +459,28 @@ class RAGService:
                             limit=case_law_limit,
                             question=query,
                             user_keys=user_keys,
+                            model=model,
                         ),
                         timeout=60.0,
                     )
                 except TimeoutError:
                     logger.warning("Case-law search exceeded its 60s budget; answering without it")
+                except Exception as e:  # a CourtListener outage must not fail the answer
+                    logger.warning(
+                        f"Case-law search failed ({type(e).__name__}); answering without it"
+                    )
 
         # Threshold transparency: if document search came back empty, probe
         # once WITHOUT the similarity floor. If matches exist below the
         # threshold, say so with numbers — "no relevant documents" while the
         # threshold silently discards real matches is indistinguishable from
         # data loss to the user.
-        if not search_results and not case_law_results and include_documents and not document_ids:
+        if (
+            not search_results
+            and not case_law_results
+            and include_documents
+            and document_ids is None
+        ):
             effective_threshold = similarity_threshold or settings.similarity_threshold
             try:
                 probe = await self.search(
@@ -414,6 +529,7 @@ class RAGService:
                 gemini_model,
                 start_time,
                 effective_settings,
+                scoped=bool(document_ids),
             )
 
         # Build context from both sources. Context compression trims each chunk to
@@ -433,9 +549,8 @@ class RAGService:
             logger.debug("[RAG] Strategy mode selected - using ANALYTICAL intent")
         else:
             query_intent = detect_query_intent(query)
-            logger.info(
-                f"[RAG] Query intent detected: {query_intent.value} for query: '{query[:50]}...'"
-            )
+            # The query text itself is client-confidential — never logged.
+            logger.info(f"[RAG] Query intent detected: {query_intent.value}")
 
         # Get system prompt and build user prompt. The context below carries
         # third-party text in delimited blocks; the rule (once per prompt)
@@ -449,8 +564,9 @@ class RAGService:
             query, context, query_intent, case_law_results, effective_settings
         )
 
-        # Generate LLM response (model already resolved from user settings above)
-        _enforce_hipaa_provider_check(model)
+        # Generate LLM response (model already resolved from user settings
+        # above). The provider allowlist is enforced inside call_llm, against
+        # the client that actually carries the request.
         # Honor the user's max-tokens setting, capped by what the model/intent allows.
         model_token_cap = get_model_max_tokens(model, query_intent)
         if query_intent == QueryIntent.FACTUAL:
@@ -469,11 +585,8 @@ class RAGService:
                 max_tokens,
                 effective_settings.temperature,
             )
-        except ValueError:
-            raise
-        except (KeyError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
-            logger.error(f"LLM generation failed: {e}", exc_info=True)
-            raise ValueError(f"AI generation failed: {type(e).__name__}. Please try again.")
+        except Exception as e:  # provider SDK errors share no builtin base class
+            return self._llm_failure_response(e, start_time)
 
         # Case law is never trusted from the model: redact any case reference
         # not traceable to this request's CourtListener results or the user's
@@ -511,6 +624,7 @@ class RAGService:
                     search_results=search_results,
                     user_id=user_id,
                     user_keys=user_keys,
+                    model=model,
                 )
             except Exception as e:  # grounding is best-effort
                 logger.warning(f"Claim grounding failed, keeping chunk citations: {e}")
@@ -529,6 +643,7 @@ class RAGService:
             query=query,
             answer=content,
             user_keys=user_keys,
+            model=model,
         )
 
         processing_time = time.time() - start_time
@@ -588,7 +703,13 @@ class RAGService:
         gemini_model,
         model,
     ) -> list[dict[str, Any]]:
-        """Retrieve document chunks for the query (selected docs or semantic search).
+        """Retrieve the passages most relevant to the query.
+
+        ``document_ids`` None searches everything the user can see; a list
+        restricts the SAME semantic search to those documents (spread across
+        the selected files, with real similarity scores) — selecting files
+        narrows where we look, it does not replace looking. An empty list
+        retrieves nothing.
 
         Raises SearchUnavailableError when the search infrastructure fails —
         the caller turns that into an honest error answer instead of "no
@@ -596,18 +717,10 @@ class RAGService:
         """
         if not include_documents:
             return []
-
+        if document_ids is not None and not document_ids:
+            return []
         if document_ids:
-            logger.info(
-                f"[RAG] DOCUMENT CHAT MODE: Loading content from {len(document_ids)} selected document(s)"
-            )
-            search_results = await get_document_chunks_directly(
-                self.vector_db, document_ids, top_k or 15, user_id=user_id
-            )
-            logger.info(f"[RAG] Loaded {len(search_results)} chunks from selected documents")
-            if not search_results:
-                logger.warning(f"[RAG] No chunks found for document IDs: {document_ids}")
-            return search_results
+            logger.info(f"[RAG] Scoped retrieval over {len(document_ids)} selected document(s)")
 
         # Query expansion: search the original query plus LLM-generated
         # paraphrases, then merge by best-similarity per chunk (multi-query).
@@ -628,7 +741,7 @@ class RAGService:
                     use_hybrid=effective_settings.hybrid_search,
                     use_reranking=effective_settings.enable_reranking,
                     user_keys=user_keys,
-                    document_ids=None,
+                    document_ids=document_ids,
                     user_id=user_id,
                 )
             )
@@ -650,6 +763,7 @@ class RAGService:
         gemini_model,
         start_time,
         effective_settings=None,
+        scoped: bool = False,
     ) -> dict[str, Any]:
         """Handle case when no search results are found."""
         effective_settings = effective_settings or RAGSettings()
@@ -689,11 +803,8 @@ class RAGService:
                     max_tokens,
                     temperature,
                 )
-            except ValueError:
-                raise
-            except (KeyError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
-                logger.error(f"LLM generation failed: {e}", exc_info=True)
-                raise ValueError(f"AI generation failed: {type(e).__name__}. Please try again.")
+            except Exception as e:  # provider SDK errors share no builtin base class
+                return self._llm_failure_response(e, start_time)
 
             # Direct-LLM path has no retrieved sources at all, so no case
             # reference the model produces here can be verified — remove all.
@@ -723,7 +834,13 @@ class RAGService:
             "case law for your query. Please try rephrasing or ensure relevant "
             "documents have been indexed."
         )
-        if include_documents and self.vector_db is not None:
+        if scoped:
+            content = (
+                "I searched the files you selected and found no passages to answer "
+                "from. They may have no extractable text (for example a scanned PDF "
+                "without OCR) — check their status in the knowledge base."
+            )
+        elif include_documents and self.vector_db is not None:
             try:
                 db_stats = await self.vector_db.get_stats()
                 if db_stats.get("total_chunks", 0) == 0:
@@ -734,10 +851,38 @@ class RAGService:
                         "at startup, or you can re-upload. Check each document's "
                         "status in the knowledge base."
                     )
-            except (ValueError, KeyError, ConnectionError, TimeoutError, OSError, RuntimeError):
-                pass  # stats are best-effort; fall through to the generic message
+            except Exception:  # nosec B110 - stats are best-effort; keep the generic message
+                pass
         return {
             "content": content,
+            "citations": [],
+            "stats": ChatStats(
+                docs_searched=0,
+                chunks_retrieved=0,
+                processing_time=f"{time.time() - start_time:.2f}s",
+                case_law_searched=0,
+                case_law_included=0,
+            ),
+        }
+
+    @staticmethod
+    def _llm_failure_response(error: Exception, start_time: float) -> dict[str, Any]:
+        """An honest answer-shaped response for a failed generation call.
+
+        Provider failures (rate limit, rejected key, timeout, outage) and
+        configuration problems are things the user can act on; a bare 500
+        tells them nothing. The upstream error body is logged, never shown.
+        """
+        logger.error(
+            f"LLM generation failed: {type(error).__name__}: {error}",
+            exc_info=not isinstance(error, ValueError),
+        )
+        return {
+            "content": (
+                f"⚠ I couldn't generate an answer: {describe_llm_failure(error)}\n\n"
+                "No answer was attempted — this is a problem reaching the AI "
+                "provider, not a gap in your documents."
+            ),
             "citations": [],
             "stats": ChatStats(
                 docs_searched=0,

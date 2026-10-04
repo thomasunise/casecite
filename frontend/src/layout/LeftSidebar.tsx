@@ -149,6 +149,31 @@ function LeftSidebar() {
               </button>
               );
             })}
+            {/* Authority Map is its own full-page workspace, like Judge Intel. */}
+            <button
+              className={`${s.modeBtn} ${location.pathname.startsWith('/case-citations') ? s.modeBtnActive : ''} ${collapsed ? s.modeBtnCollapsed : ''} ${!isAuthenticated ? s.modeBtnLocked : ''}`}
+              onClick={() => {
+                if (!isAuthenticated) { setShowSignupModal(true); return; }
+                navigate('/case-citations');
+              }}
+              title={collapsed ? 'Authority Map' : undefined}
+            >
+              {!isAuthenticated && !collapsed && (
+                <Icon name="Lock" size={10} className={`${s.iconGold500} ${s.lockIconExpanded}`} />
+              )}
+              {!isAuthenticated && collapsed && (
+                <Icon name="Lock" size={8} className={`${s.iconGold500} ${s.lockIconCollapsed}`} />
+              )}
+              <div className={`${s.modeIcon} ${location.pathname.startsWith('/case-citations') ? s.modeIconActive : ''}`}>
+                <Icon name="FileSearch" size={16} />
+              </div>
+              {!collapsed && (
+                <div className={s.modeContent}>
+                  <span className={s.modeTitle}>Authority Map</span>
+                  <span className={s.modeDesc}>Case law for each proposition in a document</span>
+                </div>
+              )}
+            </button>
           </div>
         </div>
 

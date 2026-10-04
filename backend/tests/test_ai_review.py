@@ -4,7 +4,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from app.services.contract_analysis.ai_review import ai_review_findings
 
 CONTRACT = (

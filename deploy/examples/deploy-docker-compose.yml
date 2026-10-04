@@ -16,6 +16,10 @@
 #   DEPLOY_HOST       — VPS IP or hostname
 #   DEPLOY_USER       — SSH user (e.g. root or deploy)
 #   DEPLOY_SSH_KEY    — private SSH key (ed25519 or RSA)
+#   DEPLOY_HOST_FINGERPRINT — the server's SSH host-key fingerprint, so the
+#                       job refuses to send the key to an impostor host. Get it
+#                       on the VPS with:
+#                         ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub | cut -d ' ' -f2
 #   GHCR_PULL_TOKEN   — a GitHub PAT with ONLY read:packages, used to `docker
 #                       login` on the VPS. Never forward GITHUB_TOKEN into a
 #                       remote shell: it ends up in shell history and has
@@ -30,27 +34,37 @@ on:
   workflow_run:
     workflows: ["CI/CD Pipeline"]
     types: [completed]
-    branches: [master, main]
+    branches: [main]
 
 jobs:
   deploy:
     name: Deploy via SSH
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Only a successful CI run for a PUSH to this repository's main branch
+    # deploys. Without the event check, a pull request from a fork whose branch
+    # happens to be named "main" also matches the branch filter above.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
     environment: production
 
     steps:
       - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
           # CI tags the image with the full commit SHA (see ci.yml metadata step).
           envs: TAG,GHCR_USER,GHCR_PULL_TOKEN
           script: |
             set -e
             cd /opt/casecite
+
+            # The tag is written into .env below: accept a full commit SHA only.
+            echo "$TAG" | grep -Eq '^[0-9a-f]{40}$' || { echo "refusing to deploy: '$TAG' is not a commit SHA"; exit 1; }
 
             if [ -n "$GHCR_PULL_TOKEN" ]; then
               echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin

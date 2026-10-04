@@ -51,9 +51,11 @@ describe('citationParser', () => {
     expect(result[0].id).toBe('mock-id');
     expect(result[0].source).toBe('Source 1');
     expect(result[0].type).toBe('document');
-    expect(result[0].confidence).toBe(80); // default 0.8 * 100
+    // No score from the server means no score here — never an invented one.
+    expect(result[0].confidence).toBeUndefined();
     expect(result[0].status).toBe('pending');
-    expect(result[0].similarity).toBe(0.8);
+    expect(result[0].similarity).toBeUndefined();
+    expect(result[0].weakMatch).toBeUndefined();
     expect(result[0].relevanceRank).toBe(1);
     expect(result[0].chunkIndex).toBe(0);
     // No invented token counts or placeholder passages.
@@ -68,6 +70,26 @@ describe('citationParser', () => {
     expect(result[0].logic.queryIntent).toBe('');
     expect(result[0].logic.matchingCriteria).toBe('Semantic match from your documents');
     expect(result[0].logic.application).toBe('');
+  });
+
+  it('treats a zero score from the server as no score', () => {
+    const result = parseCitations([{ confidence: 0, similarity: 0 }]);
+    expect(result[0].confidence).toBeUndefined();
+    expect(result[0].similarity).toBeUndefined();
+  });
+
+  it('flags passages the server retrieved below the similarity threshold', () => {
+    const result = parseCitations([{
+      confidence: 18,
+      similarity: 0.18,
+      reasoning: [{
+        type: 'Relevance Ranking',
+        description: 'Ranked #4',
+        evidence: 'This passage scored 0.180 vector similarity — below your similarity threshold (weak match)',
+      }],
+    }]);
+    expect(result[0].weakMatch).toBe(true);
+    expect(result[0].similarity).toBe(0.18);
   });
 
   it('handles confidence values greater than 1 (percentage)', () => {

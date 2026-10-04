@@ -3,6 +3,7 @@ import { registerReset } from './resetRegistry';
 import { conversationTitle, downloadConversation } from '../utils/conversationExport';
 import type { ConversationExportFormat } from '../api/types';
 import { api, API_BASE_URL } from '../api';
+import { formatErrorDetail } from '../api/client';
 import { persistWorkspaceSession, resetWorkspaceSessionKey } from './workspaceSessionsStore';
 import logger from '../utils/logger';
 
@@ -150,7 +151,7 @@ return ({
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Failed to load case');
+        throw new Error(formatErrorDetail(errorData.detail, 'Failed to load case'));
       }
       set({ selectedCase: await response.json() });
     } catch (error: unknown) {
@@ -174,7 +175,7 @@ return ({
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Failed to load docket');
+        throw new Error(formatErrorDetail(errorData.detail, 'Failed to load docket'));
       }
       set({ selectedDocket: await response.json() });
     } catch (error: unknown) {
@@ -236,7 +237,7 @@ return ({
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Request failed: ${response.status}`);
+        throw new Error(formatErrorDetail(errorData.detail, `Request failed: ${response.status}`));
       }
 
       const data = await response.json();
@@ -339,10 +340,8 @@ return ({
       const context = summarizeToolResult(activeTool.id, toolInput, toolResult);
       const response = await api.authFetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(api.getToken() && { Authorization: `Bearer ${api.getToken()}` }),
-        },
+        // Case-law answers read full opinions — same budget as api.query.
+        timeout: 180000,
         body: JSON.stringify({
           query: `Using these ${activeTool.name || 'legal search'} results for "${toolInput}", answer the question.
 
@@ -357,7 +356,7 @@ Question: ${userQuery}`,
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Chat failed. Please check that you have entered an API key in Settings.');
+        throw new Error(formatErrorDetail(errorData.detail, 'Chat failed. Please check that you have entered an API key in Settings.'));
       }
       const data = await response.json();
       set((state) => ({

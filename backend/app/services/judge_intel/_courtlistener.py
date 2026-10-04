@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -237,7 +238,10 @@ class CourtListenerMixin:
             f"{api_judge_data.get('name_first', '')} {api_judge_data.get('name_last', '')}".strip()
         )
         update_progress(f"Searching Wikipedia for {judge_name}...")
-        wikipedia_data = await self.fetch_wikipedia_data(judge_name)
+        dob_year = re.match(r"(\d{4})", str(api_judge_data.get("date_dob") or ""))
+        wikipedia_data = await self.fetch_wikipedia_data(
+            judge_name, birth_year=int(dob_year.group(1)) if dob_year else None
+        )
 
         # Helper to convert list values to comma-separated strings
         def to_string(val):

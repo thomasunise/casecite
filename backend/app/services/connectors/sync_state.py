@@ -1,8 +1,9 @@
 """
-Sync and OAuth state management for connectors.
+OAuth state management for connectors.
 
 Extracted from routers/connectors.py to keep business logic in services.
-Uses Redis with in-memory fallback.
+Uses Redis with in-memory fallback. Sync progress is tracked by the job
+manager (services/job_queue.py), not here.
 """
 
 import json
@@ -14,20 +15,8 @@ from app.redis_utils import RedisError, get_redis
 
 logger = logging.getLogger(__name__)
 
-# In-memory fallbacks (used when Redis is unavailable)
+# In-memory fallback (used when Redis is unavailable)
 _oauth_states_memory: dict = {}
-_sync_statuses_memory: dict = {}
-_sync_owners: dict[str, str] = {}
-
-
-def get_sync_owner(sync_id: str) -> str | None:
-    """Get the user_id that owns a sync operation."""
-    return _sync_owners.get(sync_id)
-
-
-def set_sync_owner(sync_id: str, user_id: str):
-    """Record ownership of a sync operation."""
-    _sync_owners[sync_id] = user_id
 
 
 def store_oauth_state(
@@ -49,7 +38,11 @@ def store_oauth_state(
         except (RedisError, ConnectionError, OSError):
             pass
 
-    # In-memory fallback
+    # In-memory fallback. Drop abandoned (expired, never-redeemed) states first
+    # so the dict cannot grow without bound.
+    now = datetime.now(UTC)
+    for stale in [k for k, v in _oauth_states_memory.items() if v["expires_at"] < now]:
+        del _oauth_states_memory[stale]
     _oauth_states_memory[state] = {
         **data,
         "expires_at": datetime.now(UTC) + timedelta(seconds=ttl_seconds),
@@ -101,7 +94,3 @@ def validate_oauth_state(state: str, connector_type: ConnectorType) -> str | Non
     user_id = state_data["user_id"]
     del _oauth_states_memory[state]
     return user_id
-
-
-# Legacy compatibility alias
-sync_statuses = _sync_statuses_memory

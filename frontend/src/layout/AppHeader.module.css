@@ -65,6 +65,11 @@
   color: var(--amber-700);
 }
 
+.badgeUnknown {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
 .badgeGreen {
   background: var(--green-100);
   color: var(--green-600);
@@ -82,6 +87,10 @@
 
 .statusDotUnhealthy {
   background: var(--amber-500);
+}
+
+.statusDotUnknown {
+  background: var(--gray-400);
 }
 
 .headerRight {

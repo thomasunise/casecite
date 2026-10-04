@@ -49,8 +49,9 @@ function SourcesList({ s, allCitations, setSelectedCitation, showTitle = true, h
                   <span className={s.sourceName}>{claim || cite.source}</span>
                   <span className={s.sourceMeta}>
                     <span>{claim ? cite.source : (cite.type === 'case_law' ? 'Case Law' : 'Internal Doc')}</span>
-                    {/* The ONLY quality signal is binary verification — never
-                        a score or a match-strength gradient. */}
+                    {/* Quality signals are binary: verification, and a quiet
+                        flag when retrieval itself scored the passage below the
+                        user's threshold. Never a numeric score. */}
                     {cite.verified === true && (
                       <>
                         <span className={s.sourceMetaRule} aria-hidden="true" />
@@ -61,6 +62,12 @@ function SourcesList({ s, allCitations, setSelectedCitation, showTitle = true, h
                       <>
                         <span className={s.sourceMetaRule} aria-hidden="true" />
                         <span className={s.unverifiedBadge}>Unverified</span>
+                      </>
+                    )}
+                    {cite.weakMatch && (
+                      <>
+                        <span className={s.sourceMetaRule} aria-hidden="true" />
+                        <span className={s.weakMatch} title="Scored below your similarity threshold">Weak match</span>
                       </>
                     )}
                     {count > 1 && (

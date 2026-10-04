@@ -1,23 +1,32 @@
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
 from app.services import connector_credentials
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 GRAPH = "https://graph.microsoft.com/v1.0"
+
+
+def _seg(value: str) -> str:
+    """Percent-encode an id for use as a single Graph URL path segment."""
+    return quote(value, safe="!")
 
 
 class MicrosoftConnector(BaseConnector):
     """Microsoft OneDrive/SharePoint connector using OAuth 2.0.
 
-    The crawl covers the personal OneDrive plus every SharePoint site drive
-    the account can reach. Items outside the personal drive use composite ids
-    ("drv:{driveId}:{itemId}") so listing and download know which drive to hit.
+    A full-account crawl covers the personal OneDrive plus every SharePoint
+    site drive the account can reach; a folder-scoped crawl starts at the
+    given item, drive ("drive:{driveId}") or composite id instead. Items
+    outside the personal drive use composite ids ("drv:{driveId}:{itemId}")
+    so listing and download know which drive to hit.
+
+    Scopes are read-only: the connector only lists and downloads.
     """
 
     connector_type = ConnectorType.ONEDRIVE
@@ -31,7 +40,6 @@ class MicrosoftConnector(BaseConnector):
 
     SCOPES = [
         "Files.Read.All",
-        "Files.ReadWrite.All",
         "Sites.Read.All",
         "User.Read",
         "offline_access",
@@ -116,12 +124,12 @@ class MicrosoftConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
     async def get_account_info(self) -> dict[str, Any]:
         """Get Microsoft account information."""
@@ -242,12 +250,12 @@ class MicrosoftConnector(BaseConnector):
             include_site_drives = True
         elif folder_id.startswith("drive:"):
             drive_ctx = folder_id.removeprefix("drive:")
-            url = f"{GRAPH}/drives/{drive_ctx}/root/children"
+            url = f"{GRAPH}/drives/{_seg(drive_ctx)}/root/children"
         elif folder_id.startswith("drv:"):
             drive_ctx, item_id = self._split_composite_id(folder_id)
-            url = f"{GRAPH}/drives/{drive_ctx}/items/{item_id}/children"
+            url = f"{GRAPH}/drives/{_seg(drive_ctx)}/items/{_seg(item_id)}/children"
         else:
-            url = f"{GRAPH}/me/drive/items/{folder_id}/children"
+            url = f"{GRAPH}/me/drive/items/{_seg(folder_id)}/children"
 
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -273,9 +281,9 @@ class MicrosoftConnector(BaseConnector):
 
         drive_id, item_id = self._split_composite_id(file_id)
         if drive_id:
-            item_url = f"{GRAPH}/drives/{drive_id}/items/{item_id}"
+            item_url = f"{GRAPH}/drives/{_seg(drive_id)}/items/{_seg(item_id)}"
         else:
-            item_url = f"{GRAPH}/me/drive/items/{item_id}"
+            item_url = f"{GRAPH}/me/drive/items/{_seg(item_id)}"
 
         async with httpx.AsyncClient() as client:
             # Get download URL
@@ -288,12 +296,10 @@ class MicrosoftConnector(BaseConnector):
             download_url = response.json().get("@microsoft.graph.downloadUrl")
 
             if not download_url:
-                raise Exception("No download URL available")
+                raise ConnectorError("No download URL available")
 
-            # Download the file
-            response = await client.get(download_url)
-            response.raise_for_status()
-            return response.content
+            # Download the file (pre-authenticated URL; no bearer token sent)
+            return await self._download_capped(client, "GET", download_url)
 
 
 microsoft_connector = MicrosoftConnector()

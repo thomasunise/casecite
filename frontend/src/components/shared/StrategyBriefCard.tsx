@@ -1,8 +1,10 @@
 import { Icon } from './Icon';
 import { AiNotice } from './AiNotice';
+import { CaseLawRemovedNotice } from './CaseLawRemovedNotice';
 import { useCaseViewStore } from '../../stores/caseViewStore';
 import type { StrategyBriefResponse, StrategyBriefPoint } from '../../api/types';
 import type { Citation } from '../../types';
+import { safeHttpUrl } from './safeUrl';
 
 interface StrategyBriefCardProps {
   brief: StrategyBriefResponse;
@@ -39,7 +41,10 @@ function caseLawOutcome(cl: NonNullable<StrategyBriefResponse['case_law']>): str
   }
   if (cl.unreadable) reasons.push(`${cl.unreadable} could not be retrieved in readable form`);
   if (cl.errors) reasons.push(`${cl.errors} hit errors while being judged`);
-  const read = `${cl.opinions_read} opinion${cl.opinions_read === 1 ? ' was' : 's were'} read in full`;
+  const partial = cl.partially_read ?? 0;
+  const read = partial > 0
+    ? `${cl.opinions_read} opinion${cl.opinions_read === 1 ? ' was' : 's were'} read (${partial} only in part — too long to read in full)`
+    : `${cl.opinions_read} opinion${cl.opinions_read === 1 ? ' was' : 's were'} read in full`;
   const why = reasons.length ? `: ${reasons.join('; ')}` : ', but none survived review';
   return `Case law was searched for ${points} and ${read}${why}. Only verified authorities are ever shown — try Case Citations on a specific filing for a deeper hunt.`;
 }
@@ -109,7 +114,7 @@ function StrategyBriefCard({ brief, citations, onCitationClick, s }: StrategyBri
                           {auth.url && (
                             <a
                               className={s.briefAuthorityLink}
-                              href={auth.url}
+                              href={safeHttpUrl(auth.url) ?? undefined}
                               target="_blank"
                               rel="noreferrer"
                             >
@@ -141,6 +146,9 @@ function StrategyBriefCard({ brief, citations, onCitationClick, s }: StrategyBri
           <span className={s.briefTruncNote}> (of {brief.scope.documents_total})</span>
         )}
       </div>
+      {brief.scope?.coverage_note && (
+        <div className={s.briefCoverageNote}>{brief.scope.coverage_note}</div>
+      )}
       <p className={s.briefPosition}>{brief.position}</p>
       {renderPoints('Strengths', brief.strengths)}
       {renderPoints('Weaknesses & Exposure', brief.weaknesses)}
@@ -150,6 +158,12 @@ function StrategyBriefCard({ brief, citations, onCitationClick, s }: StrategyBri
           <Icon name="Scale" size={12} /> {caseLawOutcome(brief.case_law)}
         </div>
       )}
+      {brief.case_law?.requested && brief.case_law.attached > 0 && (brief.case_law.partially_read ?? 0) > 0 && (
+        <div className={s.briefCaseLawNote}>
+          <Icon name="Scale" size={12} /> {brief.case_law.partially_read} of the opinions considered {brief.case_law.partially_read === 1 ? 'was' : 'were'} too long to read in full; only the opening portion was reviewed.
+        </div>
+      )}
+      <CaseLawRemovedNotice removed={brief.case_law_removed} className={s.briefCaseLawNote} />
       <AiNotice />
     </div>
   );

@@ -1,9 +1,11 @@
 """Admin user-management router.
 
-Lets an admin list users, invite new users with an assigned role, and change
-existing users' roles. Admin-only. Self-hosted: "invite" creates an active
-account with a generated one-time temporary password (returned once to the
-admin to hand off) since email delivery may not be configured.
+Lets an admin list users, invite new users with an assigned role, change
+existing users' roles, deactivate or delete accounts, force a sign-out, and
+reset a user's MFA. Admin-only. Self-hosted: "invite" creates an active
+account with a generated temporary password (returned once to the admin to
+hand off) since email delivery may not be configured; the invited user must
+replace it at first sign-in before anything else is reachable.
 """
 
 import asyncio
@@ -11,6 +13,7 @@ import logging
 import secrets
 import string
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -28,7 +31,7 @@ from app.models.schemas import (
     UpdateUserRoleRequest,
 )
 from app.services.audit import AuditEventType, audit_service
-from app.services.auth import TokenData, UserRole
+from app.services.auth import TokenData, UserRole, auth_service
 from app.services.permissions import require_permission
 from app.utils.ip_resolution import get_client_ip
 
@@ -51,6 +54,8 @@ def _to_item(u: DBUser) -> AdminUserItem:
         name=u.name or "",
         roles=roles,
         is_active=bool(u.is_active),
+        mfa_enabled=bool(u.mfa_enabled),
+        must_change_password=bool(u.must_change_password),
         created_at=u.created_at,
         last_login=u.last_login,
     )
@@ -71,6 +76,24 @@ def _generate_temp_password() -> str:
     )
 
 
+async def _end_all_sessions(db: AsyncSession, target: DBUser) -> int:
+    """Invalidate every token of ``target`` on every device; returns sessions ended.
+
+    Bumps users.token_version (outstanding access and refresh tokens carry the
+    old version and are rejected from now on) and drops the live sessions.
+    """
+    target.token_version = int(target.token_version or 0) + 1
+    await db.commit()
+    return auth_service.revoke_user_sessions(target.id)
+
+
+async def _get_target(db: AsyncSession, user_id: str) -> DBUser:
+    target = (await db.execute(select(DBUser).where(DBUser.id == user_id))).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    return target
+
+
 @router.get("", response_model=AdminUserListResponse)
 async def list_users(
     current_user: TokenData = require_permission("admin.users"),
@@ -89,7 +112,13 @@ async def invite_user(
     current_user: TokenData = require_permission("admin.users"),
     db: AsyncSession = Depends(get_db),
 ) -> InviteUserResponse:
-    """Create a user with the given role and a one-time temporary password."""
+    """Create a user with the given role and a temporary password.
+
+    The temporary password is returned once, to the inviting admin. Because the
+    admin has seen it, the account is flagged ``must_change_password``: until
+    the invited user sets their own password, every API call except
+    change-password/logout/me is refused.
+    """
     from app.services.passwords import hash_password
 
     if body.role not in _VALID_ROLES:
@@ -113,6 +142,8 @@ async def invite_user(
         roles=[body.role],
         email_verified=True,
         is_active=True,
+        must_change_password=True,
+        password_changed_at=datetime.now(UTC).replace(tzinfo=None),
     )
     db.add(db_user)
     await db.commit()
@@ -246,17 +277,10 @@ async def update_user_role(
             raise HTTPException(status_code=400, detail="Cannot remove the last remaining admin.")
 
     target.roles = [body.role]
-    await db.commit()
-    await db.refresh(target)
-
     # Revoke the user's sessions so tokens carrying the OLD role stop working
     # immediately (roles are embedded in the access token at issue time).
-    from app.middleware.security import session_manager
-    from app.services.auth import auth_service
-
-    for _session in session_manager.get_active_sessions_raw(target.id):
-        auth_service.revoke_token(_session["jti"])
-    session_manager.terminate_all_sessions(target.id)
+    await _end_all_sessions(db, target)
+    await db.refresh(target)
 
     await audit_service.log_event(
         event_type=AuditEventType.USER_ROLE_CHANGE,
@@ -308,21 +332,16 @@ async def set_user_active(
                 )
 
     target.is_active = body.is_active
-    await db.commit()
+    if body.is_active:
+        await db.commit()
+    else:
+        # On deactivation, revoke sessions/tokens so access is cut immediately
+        # rather than lingering until token expiry.
+        await _end_all_sessions(db, target)
     await db.refresh(target)
 
-    # On deactivation, revoke sessions/tokens so access is cut immediately
-    # rather than lingering until token expiry.
-    if not body.is_active:
-        from app.middleware.security import session_manager
-        from app.services.auth import auth_service
-
-        for _session in session_manager.get_active_sessions_raw(target.id):
-            auth_service.revoke_token(_session["jti"])
-        session_manager.terminate_all_sessions(target.id)
-
     await audit_service.log_event(
-        event_type=AuditEventType.USER_UPDATE,
+        event_type=AuditEventType.USER_UPDATE if body.is_active else AuditEventType.USER_DEACTIVATE,
         user_id=current_user.user_id,
         user_email=current_user.email,
         resource_type="user",
@@ -334,6 +353,82 @@ async def set_user_active(
     return _to_item(target)
 
 
+@router.post("/{user_id}/sessions/revoke")
+async def force_sign_out(
+    user_id: str,
+    request: Request,
+    current_user: TokenData = require_permission("admin.users"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Sign a user out everywhere (incident containment, lost device).
+
+    Ends every live session and invalidates every outstanding access and
+    refresh token of the account. The account stays active: the user can sign
+    in again with their credentials. To keep them out, deactivate instead.
+    """
+    target = await _get_target(db, user_id)
+    ended = await _end_all_sessions(db, target)
+
+    await audit_service.log_event(
+        event_type=AuditEventType.USER_UPDATE,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="user",
+        resource_id=target.id,
+        ip_address=get_client_ip(request),
+        details={"action": "force_sign_out", "sessions_revoked": ended},
+    )
+    return {"status": "signed_out", "user_id": target.id, "sessions_revoked": ended}
+
+
+@router.post("/{user_id}/mfa/reset")
+async def reset_user_mfa(
+    user_id: str,
+    request: Request,
+    current_user: TokenData = require_permission("admin.users"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Remove a user's MFA enrollment (lost authenticator and no recovery codes).
+
+    Clears the TOTP secret and recovery codes and signs the user out
+    everywhere. With REQUIRE_MFA on, they must enrol again at next sign-in.
+    An admin cannot reset their own MFA here — that goes through
+    /auth/mfa/disable, which demands their password and a valid code.
+    """
+    target = await _get_target(db, user_id)
+    if target.id == current_user.user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Use your own security settings to disable MFA on your account.",
+        )
+
+    had_mfa = bool(target.mfa_enabled)
+    target.mfa_enabled = False
+    target.mfa_secret = None
+    target.mfa_recovery_codes = None
+    ended = await _end_all_sessions(db, target)
+
+    await audit_service.log_event(
+        event_type=AuditEventType.MFA_DISABLED,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="user",
+        resource_id=target.id,
+        ip_address=get_client_ip(request),
+        details={"action": "admin_mfa_reset", "had_mfa": had_mfa, "sessions_revoked": ended},
+    )
+    return {"status": "mfa_reset", "user_id": target.id}
+
+
+def _row(obj) -> dict:
+    """One ORM row as JSON-serialisable column values."""
+    out = {}
+    for column in obj.__table__.columns:
+        value = getattr(obj, column.name)
+        out[column.name] = value.isoformat() if isinstance(value, datetime) else value
+    return out
+
+
 @router.get("/{user_id}/export")
 async def export_user_data(
     user_id: str,
@@ -341,15 +436,77 @@ async def export_user_data(
     current_user: TokenData = require_permission("admin.users"),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Export a user's data (profile + documents metadata + folders) as JSON.
+    """Export everything the instance holds about a user, as JSON.
 
-    Supports data-portability / right-to-access requests (GDPR Art. 20 / CCPA).
+    Included: profile; document metadata and folders; saved settings (playbook,
+    practice profile, custom prompts); chat sessions with their messages;
+    contract analyses with their parties, obligations, deadlines, defined terms
+    and clause findings; authority-map runs with their mappings; workspace
+    sessions; matters the user owns and matters they are a member of.
+
+    Not included: the uploaded files themselves (download those per document),
+    stored API keys and connector tokens (secrets), and audit-log entries (use
+    the audit export).
     """
+    from app.models.authority_map import AuthorityMapping, AuthorityMapRun
+    from app.models.chat_sessions import ChatMessageDB, ChatSessionDB
+    from app.models.clause_intel import (
+        ClauseDeviationFinding,
+        ClauseTagFinding,
+        ContractAnalysisRun,
+    )
+    from app.models.contract_analysis import (
+        ContractDeadline,
+        ContractDefinedTerm,
+        ContractObligation,
+        ContractParty,
+    )
+    from app.models.matters import Matter, MatterMember
+    from app.models.tracking import WorkspaceSessionDB
     from app.services.documents import document_service
+    from app.services.user_settings import load_user_settings
 
     target = (await db.execute(select(DBUser).where(DBUser.id == user_id))).scalar_one_or_none()
     if target is None:
         raise HTTPException(status_code=404, detail="User not found")
+
+    async def _rows(model, *where) -> list:
+        return list((await db.execute(select(model).where(*where))).scalars().all())
+
+    chat_sessions = []
+    for session in await _rows(ChatSessionDB, ChatSessionDB.user_id == user_id):
+        messages = await _rows(ChatMessageDB, ChatMessageDB.session_id == session.id)
+        messages.sort(key=lambda m: m.created_at)
+        chat_sessions.append({**_row(session), "messages": [_row(m) for m in messages]})
+
+    contract_analyses = []
+    for run in await _rows(ContractAnalysisRun, ContractAnalysisRun.user_id == user_id):
+        children = {}
+        for key, model in (
+            ("parties", ContractParty),
+            ("obligations", ContractObligation),
+            ("deadlines", ContractDeadline),
+            ("defined_terms", ContractDefinedTerm),
+            ("clause_deviations", ClauseDeviationFinding),
+            ("clause_tags", ClauseTagFinding),
+        ):
+            children[key] = [_row(r) for r in await _rows(model, model.analysis_id == run.id)]
+        contract_analyses.append({**_row(run), **children})
+
+    authority_maps = []
+    for run in await _rows(AuthorityMapRun, AuthorityMapRun.user_id == user_id):
+        mappings = await _rows(AuthorityMapping, AuthorityMapping.run_id == run.id)
+        authority_maps.append({**_row(run), "mappings": [_row(m) for m in mappings]})
+
+    workspace_sessions = [
+        _row(w) for w in await _rows(WorkspaceSessionDB, WorkspaceSessionDB.user_id == user_id)
+    ]
+
+    owned = await _rows(Matter, Matter.owner_id == user_id)
+    memberships = await _rows(MatterMember, MatterMember.user_id == user_id)
+    owned_ids = {m.id for m in owned}
+    joined_ids = [m.matter_id for m in memberships if m.matter_id not in owned_ids]
+    joined = await _rows(Matter, Matter.id.in_(joined_ids)) if joined_ids else []
 
     export = {
         "profile": {
@@ -361,6 +518,15 @@ async def export_user_data(
             "last_login": target.last_login.isoformat() if target.last_login else None,
         },
         **document_service.export_user_data(user_id),
+        "settings": load_user_settings(user_id).model_dump(mode="json"),
+        "chat_sessions": chat_sessions,
+        "contract_analyses": contract_analyses,
+        "authority_maps": authority_maps,
+        "workspace_sessions": workspace_sessions,
+        "matters": {
+            "owned": [_row(m) for m in owned],
+            "member_of": [_row(m) for m in joined],
+        },
     }
 
     await audit_service.log_event(
@@ -370,6 +536,13 @@ async def export_user_data(
         resource_type="user",
         resource_id=user_id,
         ip_address=get_client_ip(request),
+        details={
+            "action": "user_data_export",
+            "chat_sessions": len(chat_sessions),
+            "contract_analyses": len(contract_analyses),
+            "authority_maps": len(authority_maps),
+            "workspace_sessions": len(workspace_sessions),
+        },
     )
     return export
 
@@ -415,13 +588,23 @@ async def delete_user(
 
     target_email = target.email
 
-    # Revoke sessions/tokens first so access stops immediately.
-    from app.middleware.security import session_manager
-    from app.services.auth import auth_service
+    # Stored API keys go first, before anything else is touched: if the key
+    # store cannot be written the deletion stops here with the account intact,
+    # rather than removing the user while their secrets stay on disk.
+    try:
+        delete_user_keys(user_id)
+    except RuntimeError:
+        logger.error(f"User {user_id} not deleted: the API key store could not be updated")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The user's stored API keys could not be removed, so the account "
+                "was not deleted. Nothing was changed; check the data volume and try again."
+            ),
+        )
 
-    for _session in session_manager.get_active_sessions_raw(user_id):
-        auth_service.revoke_token(_session["jti"])
-    session_manager.terminate_all_sessions(user_id)
+    # Revoke sessions/tokens next so access stops immediately.
+    auth_service.revoke_user_sessions(user_id)
     # Tombstone the user id so any still-unexpired token is rejected on every
     # worker even after the DB row (and its is_active check) is gone.
     auth_service.revoke_user(user_id)
@@ -430,7 +613,6 @@ async def delete_user(
     # BYOK keys, connector OAuth credential files (revoking the grant where the
     # provider offers a cheap endpoint), and the per-user settings file.
     purge_result = await document_service.purge_user_data(user_id)
-    delete_user_keys(user_id)
     purge_result.update(await delete_user_credentials(user_id))
     purge_result["settings_files_deleted"] = delete_user_settings(user_id)
 

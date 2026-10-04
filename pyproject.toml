@@ -51,15 +51,17 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 # Single pytest configuration (backend/pytest.ini was a diverging duplicate).
-# Run from backend/: `python -m pytest tests/`. Test env vars are set by
-# backend/tests/conftest.py before the app is imported; CI sets them explicitly.
+# Run from backend/: `python -m pytest tests/`. Test env vars (including an
+# isolated temp data directory) are set by backend/tests/conftest.py before the
+# app is imported. Coverage is opt-in so a plain `pytest` needs no plugin: CI
+# passes `--cov=app --cov-branch --cov-fail-under=50` on its command line.
 testpaths = ["backend/tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short --cov=app --cov-branch --cov-fail-under=50"
+addopts = "-v --tb=short"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",

@@ -4,8 +4,8 @@
 // section in the sidebar and routes to /documents.
 // Case Citations is no longer a separate mode: its exhaustive authority-map
 // engine runs from the Matter Strategy chat ("give me all the case law for
-// this file/folder"). The /case-citations route still serves the annotated
-// document view.
+// this file/folder"). The /case-citations route (the single-document
+// Authority Map workspace) is linked from the sidebar's Legal Tools list.
 export const ANALYSIS_MODES = [
   { id: 'research', title: 'Matter Strategy', icon: 'Lightbulb', desc: 'Your files, chat, strategy & verified case law' },
   { id: 'contracts', title: 'Contracts', icon: 'FileText', desc: 'Review, redline & compare contracts' },

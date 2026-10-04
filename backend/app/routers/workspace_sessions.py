@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +19,9 @@ from app.database import get_db
 from app.models.schemas import WorkspaceSessionCreate, WorkspaceSessionUpdate
 from app.models.tracking import WorkspaceSessionDB
 from app.routers._matter_deps import accessible_matter_ids
+from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData, get_current_user
+from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,7 @@ async def create_session(
 @router.get("/{session_id}")
 async def get_session(
     session_id: str,
+    request: Request,
     current_user: TokenData = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     accessible_matters: set[str] = Depends(accessible_matter_ids),
@@ -125,6 +128,15 @@ async def get_session(
     """One session with its full payload, for rehydration (own or shared matter)."""
     row = await _get_own(
         db, session_id, current_user.user_id, accessible_matter_ids=accessible_matters
+    )
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_ACCESS,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="workspace_session",
+        resource_id=session_id,
+        ip_address=get_client_ip(request),
+        details={"surface": row.surface},
     )
     return {**_to_summary(row), "payload": row.payload or {}}
 
@@ -152,11 +164,22 @@ async def update_session(
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: str,
+    request: Request,
     current_user: TokenData = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Delete one of the user's sessions."""
     row = await _get_own(db, session_id, current_user.user_id)
+    surface = row.surface
     await db.delete(row)
     await db.commit()
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_DELETION,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="workspace_session",
+        resource_id=session_id,
+        ip_address=get_client_ip(request),
+        details={"surface": surface},
+    )
     return {"status": "deleted", "id": session_id}

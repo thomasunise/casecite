@@ -1,17 +1,25 @@
 import base64
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 
 class NetDocumentsConnector(BaseConnector):
-    """NetDocuments connector using OAuth 2.0."""
+    """NetDocuments connector using OAuth 2.0.
+
+    NOT VALIDATED AGAINST A LIVE TENANT. The endpoint paths used here (the
+    cabinet listing, cabinet folders, folder contents and document content
+    routes) were written from NetDocuments' published API shape and are
+    exercised only by mocked unit tests; no real NetDocuments repository has
+    been used to confirm them. Treat this connector as experimental until it
+    has been run against your repository.
+    """
 
     connector_type = ConnectorType.NETDOCUMENTS
 
@@ -110,12 +118,12 @@ class NetDocumentsConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
     async def get_account_info(self) -> dict[str, Any]:
         """Get NetDocuments account information."""
@@ -183,7 +191,7 @@ class NetDocumentsConnector(BaseConnector):
 
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{self.api_base}/Folder/{folder_id}/contents",
+                f"{self.api_base}/Folder/{quote(folder_id, safe='')}/contents",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
                 params=params,
             )
@@ -236,7 +244,7 @@ class NetDocumentsConnector(BaseConnector):
         """List a cabinet's top-level folders as folder entries."""
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{self.api_base}/Cabinet/{cabinet_id}/folders",
+                f"{self.api_base}/Cabinet/{quote(cabinet_id, safe='')}/folders",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
             )
             response.raise_for_status()
@@ -273,12 +281,12 @@ class NetDocumentsConnector(BaseConnector):
         await self._ensure_valid_token()
 
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.api_base}/Document/{file_id}/content",
+            return await self._download_capped(
+                client,
+                "GET",
+                f"{self.api_base}/Document/{quote(file_id, safe='')}/content",
                 headers={"Authorization": f"Bearer {self.credentials['access_token']}"},
             )
-            response.raise_for_status()
-            return response.content
 
 
 netdocuments_connector = NetDocumentsConnector()

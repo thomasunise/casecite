@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlencode
@@ -7,7 +8,7 @@ import httpx
 from app.config import settings
 from app.models.schemas import ConnectorType
 from app.services import connector_credentials
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 
 class DropboxConnector(BaseConnector):
@@ -90,12 +91,12 @@ class DropboxConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
     async def get_account_info(self) -> dict[str, Any]:
         """Get Dropbox account information."""
@@ -189,15 +190,17 @@ class DropboxConnector(BaseConnector):
         await self._ensure_valid_token()
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(
+            # json.dumps escapes quotes and non-ASCII (\uXXXX), which is what
+            # Dropbox requires for an HTTP-header-safe argument.
+            return await self._download_capped(
+                client,
+                "POST",
                 "https://content.dropboxapi.com/2/files/download",
                 headers={
                     "Authorization": f"Bearer {self.credentials['access_token']}",
-                    "Dropbox-API-Arg": f'{{"path": "{file_id}"}}',
+                    "Dropbox-API-Arg": json.dumps({"path": file_id}),
                 },
             )
-            response.raise_for_status()
-            return response.content
 
 
 dropbox_connector = DropboxConnector()

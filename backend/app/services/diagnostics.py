@@ -6,9 +6,7 @@ Extracted from the settings router so routers handle HTTP concerns only.
 """
 
 import logging
-import os
 
-from app.config import settings
 from app.models.schemas import DocumentStatus
 from app.services.embeddings import embedding_service
 
@@ -19,10 +17,14 @@ async def reindex_user_documents(user_id: str) -> dict:
     """
     Re-embed and re-index every document for *user_id*.
 
+    Each document goes through ``document_service.reindex_document`` — the one
+    re-index path, which keeps the document's matter, folder and metadata and
+    marks it FAILED (never "indexed" with nothing behind it) when re-embedding
+    fails.
+
     Returns a summary dict with counts of reindexed docs and any errors.
     """
     from app.services.documents import document_service
-    from app.services.rag import rag_service
     from app.services.user_keys import UserAPIKeys
 
     reindexed = 0
@@ -35,42 +37,24 @@ async def reindex_user_documents(user_id: str) -> dict:
     user_docs = document_service._get_user_documents(user_id)
     for doc_id, doc in list(user_docs.items()):
         try:
-            file_ext = os.path.splitext(doc.filename)[1]
-            user_file_path = os.path.join(
-                document_service._get_user_upload_dir(user_id), f"{doc_id}{file_ext}"
-            )
-            legacy_file_path = os.path.join(settings.upload_dir, f"{doc_id}{file_ext}")
+            result = await document_service.reindex_document(doc_id, user_id, user_keys)
+        except FileNotFoundError:
+            errors.append(f"{doc.filename}: file not found")
+            continue
+        except Exception as e:  # provider SDK / store errors share no base class
+            # Raised before the existing vectors were touched (unreadable file,
+            # no text, store unavailable): the document keeps its index.
+            logger.warning(f"Reindex of {doc_id} failed: {type(e).__name__}: {e}")
+            errors.append(f"{doc.filename}: {e}")
+            continue
 
-            file_path = user_file_path if os.path.exists(user_file_path) else legacy_file_path
-            if not os.path.exists(file_path):
-                errors.append(f"{doc.filename}: file not found")
-                continue
-
-            text = await document_service.extract_text(file_path, doc.content_type)
-            if not text.strip():
-                errors.append(f"{doc.filename}: no text extracted")
-                continue
-
-            await rag_service.delete_document(doc_id)
-
-            doc_type = document_service._classify_document(doc.filename, text)
-            chunk_count = await rag_service.index_document(
-                document_id=doc_id,
-                text=text,
-                filename=doc.filename,
-                source=doc.source.value,
-                doc_type=doc_type,
-                user_keys=user_keys,
-                user_id=user_id,
-            )
-
-            doc.chunk_count = chunk_count
-            doc.status = DocumentStatus.INDEXED
-            doc.metadata.pop("error", None)
+        if result is None:
+            errors.append(f"{doc.filename}: document not found")
+        elif result.status == DocumentStatus.INDEXED:
             reindexed += 1
-
-        except (ValueError, KeyError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
-            errors.append(f"{doc.filename}: {str(e)}")
+        else:
+            reason = (result.metadata or {}).get("error") or "re-indexing failed"
+            errors.append(f"{doc.filename}: {reason}")
 
     document_service._save_index()
 

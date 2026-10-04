@@ -7,7 +7,7 @@ import { useUIStore } from '../stores/uiStore';
 import {
   Icon, ContractAnalysisMessage, ContractCitedAnswer, ContractTextViewer,
   RedlineSummary, ComparisonCard, ComparisonSplitView, DraftCard, ContractFilePicker,
-  FloatingChatDock, AssistantAvatar, MessageMarkdown, AiNotice,
+  FloatingChatDock, AssistantAvatar, MessageMarkdown, AiNotice, CaseLawRemovedNotice,
 } from '../components';
 import { contractTypeLabel } from '../utils';
 import s from './ContractsView.module.css';
@@ -18,7 +18,7 @@ function ContractsView() {
     analyses, analysesLoading, openingAnalysisId, exporting, uploadingContract,
     viewerOpen, contractText, contractFileUrl, contractTextLoading, redlineDecisions,
     redlineOverrides, setRedlineOverride, contractTextDirty, updateContractText, exportEditedContract,
-    setSelectedDocumentId, init, sendMessage, openAnalysis, exportAnalysis, uploadContract, clearConversation, exportConversation,
+    setSelectedDocumentId, init, sendMessage, openAnalysis, deleteAnalysis, exportAnalysis, uploadContract, clearConversation, exportConversation,
     toggleViewer, getViewerHighlights,
     setRedlineDecision, exportRedlineDocx, exportDraftDocx,
     getActiveRedlines, pendingEditJump, setActiveEditRef,
@@ -200,8 +200,8 @@ function ContractsView() {
             <p className={s.pastEmpty}>Loading…</p>
           )}
           {analyses.map((a) => (
+            <div key={a.analysis_id} className={s.pastItem}>
             <button
-              key={a.analysis_id}
               className={s.pastRow}
               onClick={() => { openAnalysis(a.analysis_id); setShowPast(false); }}
               disabled={openingAnalysisId != null}
@@ -217,6 +217,16 @@ function ContractsView() {
               <span className={s.spacer} />
               <Icon name="ChevronRight" size={14} className={s.pastChevron} />
             </button>
+            <button
+              className={s.pastDelete}
+              onClick={() => deleteAnalysis(a.analysis_id)}
+              disabled={openingAnalysisId != null}
+              aria-label="Delete this analysis"
+              title="Delete this analysis"
+            >
+              <Icon name="Trash2" size={13} />
+            </button>
+            </div>
           ))}
         </div>
       )}
@@ -391,6 +401,9 @@ function ContractsView() {
                       seq: (prev?.seq || 0) + 1,
                     }))}
                   />
+                )}
+                {msg.role === 'assistant' && msg.kind === 'answer' && (
+                  <CaseLawRemovedNotice removed={msg.caseLawRemoved} />
                 )}
                 {msg.role === 'assistant' && msg.kind === 'text' && (
                   <MessageMarkdown text={msg.text || ''} />

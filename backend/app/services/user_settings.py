@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 SETTINGS_DIR = os.path.join(settings.chroma_persist_dir, "..", "user_settings")
 try:
     os.makedirs(SETTINGS_DIR, exist_ok=True)
-except PermissionError:
-    # Fallback: use temp dir if data volume permissions are restrictive
-    import tempfile
-
-    SETTINGS_DIR = os.path.join(tempfile.gettempdir(), "user_settings")  # nosec
-    os.makedirs(SETTINGS_DIR, exist_ok=True)
-    logger.warning(f"Could not create user_settings in data dir, using {SETTINGS_DIR}")
+except PermissionError as e:
+    # Never fall back to the system temp dir: settings hold a firm's playbook
+    # and practice profile, and a temp dir is neither persistent nor private.
+    raise RuntimeError(
+        f"Cannot create the user settings directory {os.path.abspath(SETTINGS_DIR)}: {e}. "
+        "The data volume must be writable by the application user."
+    ) from e
 
 
 def _get_user_settings_path(user_id: str) -> str:

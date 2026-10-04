@@ -241,6 +241,14 @@ class ContractAnalysisService:
             raw_summary = general_analysis.get("summary")
             if isinstance(raw_summary, str) and raw_summary.strip():
                 executive_summary = raw_summary.strip()
+            if general_analysis.get("truncated") and executive_summary:
+                # Say so in the summary itself — it is what the reviewer reads.
+                executive_summary += (
+                    "\n\nNote: this summary covers the first "
+                    f"{general_analysis.get('chars_analyzed', 0):,} of "
+                    f"{general_analysis.get('document_chars', len(text)):,} characters of the "
+                    "document; the rest was beyond the model's context window."
+                )
 
         # Unified direction-aware issues report. Never fatal: LLM failure (or no
         # client) degrades to the mechanical issue list.

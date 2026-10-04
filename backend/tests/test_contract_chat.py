@@ -4,7 +4,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from app.services.contract_analysis.chat import (
     answer_contract_question,
     route_contract_message,
@@ -57,9 +56,7 @@ class TestAnswer:
     @pytest.mark.asyncio
     async def test_verified_citation_carries_offsets(self):
         quote = "Liability is capped at the fees paid in the twelve months preceding the claim."
-        client = _client_with(
-            {"answer": "Yes — liability is capped [1].", "citations": [quote]}
-        )
+        client = _client_with({"answer": "Yes — liability is capped [1].", "citations": [quote]})
         result = await answer_contract_question(client, CONTRACT, "is there a cap?")
         [citation] = result["citations"]
         assert CONTRACT[citation["span_start"] : citation["span_end"]] == quote
@@ -76,3 +73,27 @@ class TestAnswer:
     async def test_no_client_raises_value_error(self):
         with pytest.raises(ValueError):
             await answer_contract_question(None, CONTRACT, "anything")
+
+
+class TestAnswerCaseLawGuard:
+    @pytest.mark.asyncio
+    async def test_case_not_in_the_contract_or_the_question_is_removed(self):
+        client = _client_with(
+            {
+                "answer": "The cap is enforceable under Madeup v. Imaginary, 999 F.3d 1.",
+                "citations": [],
+            }
+        )
+        result = await answer_contract_question(client, CONTRACT, "is the cap enforceable?")
+        assert "Madeup" not in result["answer"]
+        assert len(result["case_law_removed"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_case_the_lawyer_asked_about_is_kept(self):
+        answer = "The contract does not address Smith v. Jones."
+        client = _client_with({"answer": answer, "citations": []})
+        result = await answer_contract_question(
+            client, CONTRACT, "does this comply with Smith v. Jones?"
+        )
+        assert result["answer"] == answer
+        assert result["case_law_removed"] == []

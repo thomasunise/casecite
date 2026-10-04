@@ -4,21 +4,57 @@ Audit Logging Service
 Tamper-evident log of security-relevant events: each entry is HMAC-signed
 over its full stored form and chained to the previous entry, written to daily
 JSONL files with a best-effort database mirror.
+
+Chain format history
+--------------------
+v1  HMAC over seven scalar fields.
+v2  HMAC over the full stored entry. Builds that wrote v1/v2 linked each entry
+    to its own provisional hash rather than to the entry stored before it, so
+    those entries carry a valid signature but no usable linkage.
+v3  (this build) HMAC over the full stored entry and the hash version, linked
+    to the entry stored immediately before it.
+
+Verification checks every entry's own HMAC whatever its version, and enforces
+linkage from the first v3 entry onward: a v3 entry must point at the entry
+stored before it, including the last legacy entry at the upgrade boundary. A
+v1/v2 entry that follows a v3 entry is reported as tampering, and because the
+version is inside the v3 HMAC an entry cannot be relabelled as legacy to
+escape the linkage check. Logs written before the upgrade therefore keep
+verifying (edits are still caught; removal of a legacy entry is not, as it
+never was), and an upgraded instance starts without disabling
+AUDIT_HALT_ON_TAMPERING.
 """
 
-import asyncio
+import gzip
 import hashlib
 import hmac as hmac_mod
 import json
 import logging
+import re
 import threading
 import uuid
-from datetime import UTC, datetime, timedelta
+from collections import OrderedDict
+from collections.abc import Iterator
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from app.config import settings
+
+# audit_YYYY-MM-DD.jsonl, or the same name with .gz once archived
+_LOG_FILE_RE = re.compile(r"^audit_(\d{4}-\d{2}-\d{2})\.jsonl(\.gz)?$")
+
+# Entries re-verified on every startup (the most recent ones, in write order)
+_STARTUP_VERIFY_ENTRIES = 1000
+
+# Upper bound on distinct ip/email keys tracked for brute-force detection
+_FAILED_LOGIN_MAX_KEYS = 10_000
+
+
+class AuditWriteError(RuntimeError):
+    """The audit entry could not be written and AUDIT_FAIL_CLOSED is set."""
 
 
 class AuditEventType(str, Enum):
@@ -41,13 +77,9 @@ class AuditEventType(str, Enum):
     DOCUMENT_DOWNLOAD = "document.download"
     DOCUMENT_UPLOAD = "document.upload"
     DOCUMENT_DELETE = "document.delete"
-    DOCUMENT_SEARCH = "document.search"
 
     # RAG/Chat
     CHAT_QUERY = "chat.query"
-    CITATION_VIEW = "citation.view"
-    CITATION_APPROVE = "citation.approve"
-    CITATION_REJECT = "citation.reject"
 
     # Connectors
     CONNECTOR_CONNECT = "connector.connect"
@@ -57,7 +89,6 @@ class AuditEventType(str, Enum):
     CONNECTOR_SYNC_FAILURE = "connector.sync.failure"
 
     # Admin
-    SETTINGS_VIEW = "settings.view"
     SETTINGS_CHANGE = "settings.change"
     USER_CREATE = "user.create"
     USER_UPDATE = "user.update"
@@ -68,7 +99,6 @@ class AuditEventType(str, Enum):
     # API Keys
     API_KEY_CREATED = "apikey.created"
     API_KEY_DELETED = "apikey.deleted"
-    API_KEY_USED = "apikey.used"
 
     # Security Events
     ACCESS_DENIED = "security.access.denied"
@@ -86,27 +116,45 @@ class AuditEventType(str, Enum):
     DATA_ACCESS = "compliance.data.access"
     DATA_MODIFICATION = "compliance.data.modification"
     DATA_DELETION = "compliance.data.deletion"
-    CONSENT_GRANTED = "compliance.consent.granted"
-    CONSENT_REVOKED = "compliance.consent.revoked"
 
-    # HIPAA Events
-    PHI_ACCESS = "hipaa.phi.access"
-    PHI_MODIFICATION = "hipaa.phi.modification"
-    PHI_EXPORT = "hipaa.phi.export"
-    CONSENT_CHANGE = "hipaa.consent.change"
-    BREACH_SUSPECTED = "hipaa.breach.suspected"
-    BREACH_CONFIRMED = "hipaa.breach.confirmed"
-    DATA_RETENTION_VIOLATION = "hipaa.retention.violation"
+
+def format_audit_timestamp(moment: datetime) -> str:
+    """UTC timestamp as written to new entries: 2026-10-04T12:00:00.000000Z."""
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def parse_audit_timestamp(raw: str) -> datetime:
+    """Parse a stored entry timestamp into an aware UTC datetime.
+
+    Accepts the current ``...Z`` form and the ``...+00:00Z`` form written by
+    earlier builds. Raises ValueError for anything else unparseable.
+    """
+    text = raw.strip()
+    if text.endswith("Z"):
+        text = text[:-1]
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _as_utc(moment: datetime | None) -> datetime | None:
+    """Normalise a filter bound to aware UTC; naive values are taken as UTC."""
+    if moment is None:
+        return None
+    if moment.tzinfo is None:
+        return moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC)
 
 
 class AuditLog:
     """Structured audit log entry with correlation ID and chain hashing for tamper detection."""
 
-    # Class-level chain for tamper detection
+    # Hash of the last entry written to disk. Advanced only by
+    # AuditService.log() after a successful write, so the chain always
+    # describes what is actually stored.
     _last_hash: str | None = None
     _chain_lock = threading.Lock()
-    # asyncio lock for coroutine-safe chain updates (used by AuditService.log)
-    _async_chain_lock = asyncio.Lock()
 
     # HMAC key for signing log entries (derived from app secret)
     _hmac_key: bytes = (settings.audit_hmac_key or settings.secret_key).encode()[:32]
@@ -116,10 +164,10 @@ class AuditLog:
         settings.audit_hmac_key_previous.encode()[:32] if settings.audit_hmac_key_previous else None
     )
 
-    # Hash-input format written by this build. v1 covered seven scalar fields
-    # only, leaving action details, IP, user agent and error text editable
-    # without breaking the chain; v2 signs the entire stored entry.
-    HASH_VERSION = 2
+    # Hash-input format written by this build; see the module docstring.
+    HASH_VERSION = 3
+    # First version whose previous_hash is the entry stored before it.
+    LINKED_HASH_VERSION = 3
 
     @classmethod
     def verification_keys(cls) -> list[bytes]:
@@ -144,7 +192,7 @@ class AuditLog:
         request_id: str | None = None,
     ):
         self.id = str(uuid.uuid4())
-        self.timestamp = datetime.now(UTC).isoformat() + "Z"
+        self.timestamp = format_audit_timestamp(datetime.now(UTC))
         self.event_type = event_type.value
         self.user_id = user_id
         self.user_email = user_email
@@ -163,13 +211,20 @@ class AuditLog:
         # Request ID for tracing within a single request
         self.request_id = request_id
 
-        # Chain hash for tamper detection (thread-safe)
-        with AuditLog._chain_lock:
-            self.previous_hash = AuditLog._last_hash
-            self.hash_version = AuditLog.HASH_VERSION
-            self.entry_hash: str | None = None
-            self.entry_hash = self._compute_hash()
-            AuditLog._last_hash = self.entry_hash
+        # Provisional seal so a standalone entry is well-formed. The chain
+        # itself is not advanced here: AuditService.log() re-seals the entry
+        # against the last stored hash at write time.
+        self.hash_version = AuditLog.HASH_VERSION
+        self.previous_hash: str | None = None
+        self.entry_hash: str | None = None
+        self.seal(AuditLog._last_hash)
+
+    def seal(self, previous_hash: str | None) -> str:
+        """Link this entry to `previous_hash` and sign it. Returns the entry hash."""
+        self.previous_hash = previous_hash
+        self.entry_hash = None
+        self.entry_hash = self._compute_hash()
+        return self.entry_hash
 
     def _compute_hash(self) -> str:
         """Compute HMAC-SHA256 over the full stored entry, chained to the previous one.
@@ -244,16 +299,28 @@ def _canonical_payload(entry: dict[str, Any]) -> bytes:
     return json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _hash_version(entry: dict[str, Any]) -> int:
+    """An entry's recorded hash version; anything without a usable one is v1."""
+    version = (entry.get("integrity") or {}).get("hash_version")
+    if isinstance(version, int) and not isinstance(version, bool) and version > 0:
+        return version
+    return 1
+
+
 def compute_entry_hash(entry: dict[str, Any], key: bytes) -> str:
     """Recompute an entry's chain HMAC from its stored form under `key`.
 
-    Honors the entry's own `integrity.hash_version` so legacy v1 entries keep
+    Honors the entry's own `integrity.hash_version` so legacy entries keep
     verifying after an upgrade; anything without a version is treated as v1.
     """
     integrity = entry.get("integrity") or {}
     previous = integrity.get("previous_hash") or "GENESIS"
-    version = integrity.get("hash_version") or 1
-    if version >= 2:
+    version = _hash_version(entry)
+    if version >= 3:
+        # The version is part of the signed input, so a linked entry cannot be
+        # relabelled as a legacy one without invalidating its signature.
+        message = f"v{version}\n{previous}\n".encode() + _canonical_payload(entry)
+    elif version == 2:
         message = previous.encode() + b"\n" + _canonical_payload(entry)
     else:
         user = entry.get("user") or {}
@@ -277,15 +344,79 @@ def verify_entry_hash(entry: dict[str, Any]) -> bool:
     )
 
 
-class AuditService:
-    """
-    Audit logging service.
+@dataclass
+class ChainCheck:
+    """Outcome of verifying a run of stored entries in write order."""
 
-    In production, this should write to:
-    - Azure Monitor / Log Analytics
-    - Azure Blob Storage (immutable)
-    - SIEM system
+    valid: bool
+    entries_checked: int
+    first_invalid_id: str | None = None
+    reason: str | None = None
+    # Entries written before linkage was enforced (signature checked only)
+    legacy_entries: int = 0
+
+
+def check_chain(entries: list[dict[str, Any]]) -> ChainCheck:
+    """Verify `entries` (consecutive stored entries, oldest first).
+
+    Every entry's HMAC is recomputed. Linkage is enforced for v3+ entries and
+    a legacy entry after a linked one is rejected; see the module docstring.
+    The first entry of the run has no predecessor in hand, so only its
+    signature is checked.
     """
+    previous: dict[str, Any] | None = None
+    linked_seen = False
+    legacy = 0
+
+    for entry in entries:
+        integrity = entry.get("integrity") or {}
+        entry_id = entry.get("id")
+        linked = _hash_version(entry) >= AuditLog.LINKED_HASH_VERSION
+
+        reason = None
+        if linked:
+            if previous is not None:
+                expected = (previous.get("integrity") or {}).get("entry_hash")
+                found = integrity.get("previous_hash")
+                if found != expected:
+                    reason = (
+                        f"AUDIT CHAIN INTEGRITY BROKEN at entry {entry_id}. "
+                        f"Expected previous_hash={expected}, got {found}"
+                    )
+        elif linked_seen:
+            reason = (
+                f"AUDIT CHAIN INTEGRITY BROKEN at entry {entry_id}: a legacy-format "
+                "entry follows a linked entry."
+            )
+
+        if reason is None and not verify_entry_hash(entry):
+            reason = (
+                f"AUDIT ENTRY HMAC MISMATCH at entry {entry_id}: "
+                "the stored entry does not match its signature. Either the "
+                "entry was modified after it was written, or AUDIT_HMAC_KEY "
+                "was rotated without setting AUDIT_HMAC_KEY_PREVIOUS."
+            )
+
+        if reason is not None:
+            return ChainCheck(
+                valid=False,
+                entries_checked=len(entries),
+                first_invalid_id=entry_id,
+                reason=reason,
+                legacy_entries=legacy,
+            )
+
+        if linked:
+            linked_seen = True
+        else:
+            legacy += 1
+        previous = entry
+
+    return ChainCheck(valid=True, entries_checked=len(entries), legacy_entries=legacy)
+
+
+class AuditService:
+    """Writes, queries, verifies and rotates the audit trail."""
 
     def __init__(self):
         self.log_dir = Path(settings.upload_dir).parent / "audit_logs"
@@ -295,79 +426,92 @@ class AuditService:
         self._load_last_hash()
         self._verify_chain_on_startup()
 
+    # ==================== Log files ====================
+
+    def _log_files(self) -> list[tuple[date, Path]]:
+        """Daily log files, oldest first, including gzip archives.
+
+        When a day has both the plain file and its archive (rotation was
+        interrupted between compressing and unlinking), the plain file wins.
+        """
+        by_date: dict[date, Path] = {}
+        for path in self.log_dir.glob("audit_*.jsonl*"):
+            match = _LOG_FILE_RE.match(path.name)
+            if not match:
+                continue
+            try:
+                file_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if file_date not in by_date or not match.group(2):
+                by_date[file_date] = path
+        return sorted(by_date.items())
+
+    @staticmethod
+    def _read_entries(path: Path) -> list[dict[str, Any]]:
+        """All parseable entries of one log file, in write order."""
+        opener = gzip.open if path.suffix == ".gz" else open
+        entries = []
+        with opener(path, "rt", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(entry, dict):
+                    entries.append(entry)
+        return entries
+
+    def _tail_entries(self, count: int) -> list[dict[str, Any]]:
+        """The most recent `count` stored entries, oldest first, across files."""
+        chunks: list[list[dict[str, Any]]] = []
+        total = 0
+        for _, path in reversed(self._log_files()):
+            entries = self._read_entries(path)
+            chunks.append(entries)
+            total += len(entries)
+            if total >= count:
+                break
+        ordered = [entry for chunk in reversed(chunks) for entry in chunk]
+        return ordered[-count:]
+
     def _load_last_hash(self):
-        """Load the last chain hash from the most recent log file on startup.
+        """Load the hash of the last stored entry on startup.
 
         This ensures the chain is preserved across process restarts.
         """
         try:
-            log_files = sorted(self.log_dir.glob("audit_*.jsonl"), reverse=True)
-            for log_file in log_files:
-                # Read the last line of the most recent file
-                last_line = None
-                with open(log_file) as f:
-                    for line in f:
-                        if line.strip():
-                            last_line = line
-                if last_line:
-                    entry = json.loads(last_line)
-                    last_hash = entry.get("integrity", {}).get("entry_hash")
-                    if last_hash:
-                        AuditLog._last_hash = last_hash
-                        return
-        except (OSError, json.JSONDecodeError, KeyError, ValueError):
+            tail = self._tail_entries(1)
+            if tail:
+                last_hash = (tail[-1].get("integrity") or {}).get("entry_hash")
+                if last_hash:
+                    AuditLog._last_hash = last_hash
+        except (OSError, EOFError, ValueError):
             pass  # Start fresh chain if we can't load
 
     def _verify_chain_on_startup(self):
         """Verify integrity of recent audit entries on startup.
 
-        Verifies up to 1000 entries from the most recent log files.
+        Verifies the most recent entries (up to _STARTUP_VERIFY_ENTRIES) in the
+        order they were written, across daily file boundaries.
         """
 
         logger = logging.getLogger(__name__)
         try:
-            log_files = sorted(self.log_dir.glob("audit_*.jsonl"), reverse=True)
-            if not log_files:
+            entries = self._tail_entries(_STARTUP_VERIFY_ENTRIES)
+            if not entries:
                 return
 
-            entries = []
-            for log_file in log_files:
-                with open(log_file) as f:
-                    for line in f:
-                        if line.strip():
-                            try:
-                                entries.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
-                if len(entries) >= 1000:
-                    break
-            entries = entries[-1000:]
+            # Linkage between neighbours AND each entry's own HMAC. Linkage
+            # alone only proves the previous_hash pointers agree; recomputing
+            # the HMAC is what catches an edited entry (or a whole chain
+            # rewritten by someone without the key).
+            result = check_chain(entries)
 
-            # Verify the chain: linkage between neighbours AND each entry's own
-            # HMAC. Linkage alone only proves the previous_hash pointers agree;
-            # recomputing the HMAC is what catches an edited entry (or a whole
-            # chain rewritten by someone without the key).
-            msg = None
-            for i, curr_entry in enumerate(entries):
-                if i > 0:
-                    prev_hash = entries[i - 1].get("integrity", {}).get("entry_hash")
-                    curr_prev_hash = curr_entry.get("integrity", {}).get("previous_hash")
-                    if prev_hash and curr_prev_hash and prev_hash != curr_prev_hash:
-                        msg = (
-                            f"AUDIT CHAIN INTEGRITY BROKEN at entry {curr_entry.get('id')}. "
-                            f"Expected previous_hash={prev_hash}, got {curr_prev_hash}"
-                        )
-                        break
-                if not verify_entry_hash(curr_entry):
-                    msg = (
-                        f"AUDIT ENTRY HMAC MISMATCH at entry {curr_entry.get('id')}: "
-                        "the stored entry does not match its signature. Either the "
-                        "entry was modified after it was written, or AUDIT_HMAC_KEY "
-                        "was rotated without setting AUDIT_HMAC_KEY_PREVIOUS."
-                    )
-                    break
-
-            if msg is not None:
+            if not result.valid:
+                msg = result.reason
                 logger.critical(msg)
                 # Only halt in true production (stable HMAC key).
                 # In debug (local development) the HMAC key may be
@@ -382,8 +526,12 @@ class AuditService:
                     )
                 return
 
-            logger.info(f"Audit chain integrity verified ({len(entries)} entries)")
-        except (OSError, json.JSONDecodeError, KeyError, ValueError) as e:
+            logger.info(
+                "Audit chain integrity verified (%d entries, %d written before chain linkage)",
+                result.entries_checked,
+                result.legacy_entries,
+            )
+        except (OSError, EOFError, KeyError, ValueError) as e:
             logger.warning(f"Could not verify audit chain on startup: {e}")
 
     def _get_log_file(self) -> Path:
@@ -394,46 +542,55 @@ class AuditService:
             self._current_log_file = self.log_dir / f"audit_{today}.jsonl"
         return self._current_log_file
 
+    # ==================== Writing ====================
+
     async def log(self, entry: AuditLog):
         """Write an audit log entry to both JSONL file and database.
 
-        Uses an asyncio lock around the chain-hash update + file write to
-        prevent concurrent coroutines from interleaving chain hashes.
+        The entry is linked to the last stored entry, signed and appended
+        under one lock with no await in between, so concurrent coroutines and
+        threads cannot interleave. The chain only advances once the line is on
+        disk: a failed write leaves no gap for the next entry to trip over.
         """
         import os
         import stat
 
-        async with AuditLog._async_chain_lock:
-            # Recompute chain hash under the async lock so concurrent
-            # coroutines cannot interleave (the __init__ lock only covers
-            # thread-level concurrency; this covers async concurrency).
-            with AuditLog._chain_lock:
-                entry.previous_hash = AuditLog._last_hash
-                entry.entry_hash = entry._compute_hash()
-                AuditLog._last_hash = entry.entry_hash
-
+        written = False
+        with AuditLog._chain_lock:
+            entry.seal(AuditLog._last_hash)
             log_file = self._get_log_file()
 
             # Append to JSONL file (one JSON object per line)
             try:
-                with open(log_file, "a") as f:
+                with open(log_file, "a", encoding="utf-8") as f:
                     f.write(entry.to_json() + "\n")
             except OSError as exc:
                 logging.getLogger(__name__).critical(
-                    "AUDIT FILE WRITE FAILED — audit entry %s lost from JSONL: %s",
+                    "AUDIT FILE WRITE FAILED — audit entry %s (%s) lost from JSONL: %s",
                     entry.id,
+                    entry.event_type,
                     exc,
                     exc_info=True,
                 )
+            else:
+                AuditLog._last_hash = entry.entry_hash
+                written = True
 
-        # Restrict file permissions to owner only (0o600)
-        try:
-            os.chmod(log_file, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass  # Windows may not support chmod
+        if written:
+            # Restrict file permissions to owner only (0o600)
+            try:
+                os.chmod(log_file, stat.S_IRUSR | stat.S_IWUSR)
+            except OSError:
+                pass  # Windows may not support chmod
 
-        # Persist to database (best-effort — JSONL is the primary record)
+        # Persist to database (best-effort — JSONL is the primary record). On a
+        # failed file write this row is the only trace of the event.
         await self._persist_to_db(entry)
+
+        if not written and settings.audit_fail_closed:
+            raise AuditWriteError(
+                f"Audit entry {entry.id} could not be written and AUDIT_FAIL_CLOSED is set"
+            )
 
         # Log security events with higher priority
         if entry.event_type.startswith("security."):
@@ -445,40 +602,57 @@ class AuditService:
         Best-effort: failures are logged but do not block the primary JSONL write.
         """
         try:
-            from datetime import datetime as dt
+            from sqlalchemy.exc import IntegrityError
 
             from app.database import AsyncSessionLocal
             from app.models.audit import AuditLog as AuditLogDB
 
-            async with AsyncSessionLocal() as session:
-                db_entry = AuditLogDB(
-                    timestamp=dt.fromisoformat(entry.timestamp.rstrip("Z")),
-                    event_type=entry.event_type,
-                    user_id=entry.user_id,
-                    user_email=AuditLog._mask_email(entry.user_email),
-                    resource_type=entry.resource_type,
-                    resource_id=entry.resource_id,
-                    action_details=entry.action_details,
-                    ip_address=AuditLog._mask_ip(entry.ip_address),
-                    user_agent=entry.user_agent,
-                    success=entry.success,
-                    error_message=entry.error_message,
-                    environment=entry.environment,
-                    entry_hash=entry.entry_hash,
-                    previous_hash=entry.previous_hash,
-                    correlation_id=entry.correlation_id,
-                )
-                session.add(db_entry)
-                await session.commit()
+            row = {
+                # The column is a naive DateTime holding UTC
+                "timestamp": parse_audit_timestamp(entry.timestamp).replace(tzinfo=None),
+                "event_type": entry.event_type,
+                "user_id": entry.user_id,
+                "user_email": AuditLog._mask_email(entry.user_email),
+                "resource_type": entry.resource_type,
+                "resource_id": entry.resource_id,
+                "action_details": entry.action_details,
+                "ip_address": AuditLog._mask_ip(entry.ip_address),
+                "user_agent": entry.user_agent,
+                "success": entry.success,
+                "error_message": entry.error_message,
+                "environment": entry.environment,
+                "entry_hash": entry.entry_hash,
+                "previous_hash": entry.previous_hash,
+                "correlation_id": entry.correlation_id,
+            }
+            try:
+                async with AsyncSessionLocal() as session:
+                    session.add(AuditLogDB(**row))
+                    await session.commit()
+            except IntegrityError:
+                # audit_logs.user_id references users.id, but an actor need not
+                # have a users row (the DEBUG dev login, a just-deleted user).
+                # Mirror the event unlinked, keeping the id in the details,
+                # instead of dropping it from the queryable copy.
+                if row["user_id"] is None:
+                    raise
+                row["action_details"] = {
+                    **(entry.action_details or {}),
+                    "unlinked_user_id": row["user_id"],
+                }
+                row["user_id"] = None
+                async with AsyncSessionLocal() as session:
+                    session.add(AuditLogDB(**row))
+                    await session.commit()
         except (OSError, ValueError, KeyError, ImportError) as exc:
             logging.getLogger(__name__).warning(
-                "Audit DB write failed (JSONL primary record is intact): %s", exc, exc_info=True
+                "Audit DB write failed (JSONL is the primary record): %s", exc, exc_info=True
             )
         except Exception as exc:
             # Catch SQLAlchemy and other DB errors that escape the above tuple
 
             logging.getLogger(__name__).warning(
-                "Audit DB write failed (unexpected — JSONL primary record is intact): %s",
+                "Audit DB write failed (unexpected — JSONL is the primary record): %s",
                 exc,
                 exc_info=True,
             )
@@ -488,11 +662,13 @@ class AuditService:
 
         logger = logging.getLogger("security")
 
-        # Log security events with high priority
+        # Log security events with high priority, masked the same way as the
+        # stored entry so application logs don't carry more PII than the trail.
+        who = entry.user_id or AuditLog._mask_email(entry.user_email) or "unknown"
         log_message = (
             f"SECURITY EVENT: {entry.event_type} | "
-            f"User: {entry.user_email or entry.user_id or 'unknown'} | "
-            f"IP: {entry.ip_address or 'unknown'} | "
+            f"User: {who} | "
+            f"IP: {AuditLog._mask_ip(entry.ip_address) or 'unknown'} | "
             f"Success: {entry.success} | "
             f"Details: {entry.action_details}"
         )
@@ -506,39 +682,35 @@ class AuditService:
         if entry.event_type == AuditEventType.LOGIN_FAILURE.value:
             await self._track_failed_login(entry.ip_address, entry.user_email)
 
-        # In production, integrate with:
-        # - Azure Monitor / Log Analytics
-        # - PagerDuty / Opsgenie for critical alerts
-        # - Slack/Teams webhook for security notifications
-        # - SIEM system (Splunk, etc.)
-
     async def _track_failed_login(self, ip_address: str, email: str):
-        """Track failed login attempts for brute force detection."""
-        # In production, use Redis for tracking
-        # This is a simple in-memory implementation
+        """Track failed login attempts for brute force detection.
+
+        In-memory and per-process. The key includes a caller-supplied email,
+        so the table is capped: the least recently seen key is dropped first.
+        """
         if not hasattr(self, "_failed_logins"):
-            self._failed_logins = {}
+            self._failed_logins: OrderedDict[str, list[datetime]] = OrderedDict()
 
-        key = f"{ip_address}:{email}" if email else ip_address
-        if key not in self._failed_logins:
-            self._failed_logins[key] = []
-
-        from datetime import datetime
-
-        self._failed_logins[key].append(datetime.now(UTC))
+        key = f"{ip_address}:{email[:254]}" if email else str(ip_address)
 
         # Keep only last hour
-        one_hour_ago = datetime.now(UTC) - timedelta(hours=1)
-        self._failed_logins[key] = [t for t in self._failed_logins[key] if t > one_hour_ago]
+        now = datetime.now(UTC)
+        one_hour_ago = now - timedelta(hours=1)
+        attempts = [t for t in self._failed_logins.get(key, []) if t > one_hour_ago]
+        attempts.append(now)
+        self._failed_logins[key] = attempts
+        self._failed_logins.move_to_end(key)
+        while len(self._failed_logins) > _FAILED_LOGIN_MAX_KEYS:
+            self._failed_logins.popitem(last=False)
 
         # Alert on brute force (5+ failures in 1 hour)
-        if len(self._failed_logins[key]) >= 5:
+        if len(attempts) >= 5:
             await self.log_event(
                 event_type=AuditEventType.BRUTE_FORCE_DETECTED,
                 user_email=email,
                 ip_address=ip_address,
                 details={
-                    "failed_attempts": len(self._failed_logins[key]),
+                    "failed_attempts": len(attempts),
                     "window": "1 hour",
                 },
                 success=False,
@@ -577,32 +749,88 @@ class AuditService:
         await self.log(entry)
         return entry.id
 
+    # ==================== Verification & querying ====================
+
+    def check_chain(self, logs: list) -> ChainCheck:
+        """Verify consecutive stored entries (oldest first); see `check_chain`."""
+        return check_chain(logs)
+
     async def verify_chain_integrity(self, logs: list) -> tuple[bool, str | None]:
         """
-        Verify the integrity of a chain of audit logs.
+        Verify the integrity of a chain of audit logs (oldest first).
 
         Returns: (is_valid, first_invalid_id)
         """
-        previous_hash = None
+        result = check_chain(logs)
+        return result.valid, result.first_invalid_id
 
-        for log_entry in logs:
-            integrity = log_entry.get("integrity", {})
-            stored_previous = integrity.get("previous_hash")
-            stored_hash = integrity.get("entry_hash")
+    @staticmethod
+    def _matches(
+        entry: dict[str, Any],
+        start: datetime | None,
+        end: datetime | None,
+        event_type: AuditEventType | None,
+        user_id: str | None,
+    ) -> bool:
+        if event_type and entry.get("event_type") != event_type.value:
+            return False
+        if user_id and (entry.get("user") or {}).get("id") != user_id:
+            return False
+        if start or end:
+            try:
+                entry_time = parse_audit_timestamp(entry["timestamp"])
+            except (KeyError, ValueError, TypeError, AttributeError):
+                return False
+            if start and entry_time < start:
+                return False
+            if end and entry_time > end:
+                return False
+        return True
 
-            # Verify previous hash matches
-            if stored_previous != previous_hash:
-                if previous_hash is not None:  # Skip first entry
-                    return False, log_entry.get("id")
+    def _iter_file_entries(
+        self,
+        start_date: datetime | None,
+        end_date: datetime | None,
+        event_type: AuditEventType | None,
+        user_id: str | None,
+        newest_first: bool,
+    ) -> Iterator[dict[str, Any]]:
+        """Matching entries, one daily file at a time, in the requested order."""
+        start, end = _as_utc(start_date), _as_utc(end_date)
+        files = self._log_files()
+        if newest_first:
+            files.reverse()
 
-            # Recompute and verify the entry's own HMAC over its full stored
-            # form (or the legacy seven-field input for v1 entries).
-            if not verify_entry_hash(log_entry):
-                return False, log_entry.get("id")
+        for file_date, path in files:
+            # Skip files outside the date range based on filename
+            if start and file_date < start.date():
+                continue
+            if end and file_date > end.date():
+                continue
+            try:
+                entries = self._read_entries(path)
+            except (OSError, EOFError) as exc:
+                logging.getLogger(__name__).warning(
+                    "Could not read audit log file %s: %s", path.name, exc
+                )
+                continue
+            if newest_first:
+                entries.reverse()
+            for entry in entries:
+                if self._matches(entry, start, end, event_type, user_id):
+                    yield entry
 
-            previous_hash = stored_hash
-
-        return True, None
+    def iter_logs(
+        self,
+        start_date: datetime = None,
+        end_date: datetime = None,
+        event_type: AuditEventType = None,
+        user_id: str = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream matching entries oldest first (for export), archives included."""
+        return self._iter_file_entries(
+            start_date, end_date, event_type, user_id, newest_first=False
+        )
 
     async def get_logs(
         self,
@@ -611,50 +839,23 @@ class AuditService:
         event_type: AuditEventType = None,
         user_id: str = None,
         limit: int = 100,
+        newest_first: bool = True,
     ) -> list:
-        """Query audit logs (for compliance reporting)."""
+        """Query audit logs (for compliance reporting).
+
+        Returns the newest `limit` matching entries, gzip archives included.
+        `newest_first=False` returns that same set in write order, which is
+        what chain verification needs. Naive date bounds are taken as UTC.
+        """
         logs = []
-
-        # Read from log files
-        for log_file in sorted(self.log_dir.glob("audit_*.jsonl"), reverse=True):
-            # Skip files outside date range based on filename
-            if start_date or end_date:
-                try:
-                    file_date_str = log_file.stem.replace("audit_", "")
-                    file_date = datetime.strptime(file_date_str, "%Y-%m-%d")
-                    if start_date and file_date.date() < start_date.date():
-                        continue
-                    if end_date and file_date.date() > end_date.date():
-                        continue
-                except ValueError:
-                    pass
-
-            with open(log_file) as f:
-                for line in f:
-                    try:
-                        entry = json.loads(line)
-
-                        # Apply filters
-                        if event_type and entry["event_type"] != event_type.value:
-                            continue
-                        if user_id and entry["user"]["id"] != user_id:
-                            continue
-
-                        # Apply date filters on entry timestamp
-                        if start_date or end_date:
-                            entry_time = datetime.fromisoformat(entry["timestamp"].rstrip("Z"))
-                            if start_date and entry_time < start_date:
-                                continue
-                            if end_date and entry_time > end_date:
-                                continue
-
-                        logs.append(entry)
-
-                        if len(logs) >= limit:
-                            return logs
-                    except json.JSONDecodeError:
-                        continue
-
+        for entry in self._iter_file_entries(
+            start_date, end_date, event_type, user_id, newest_first=True
+        ):
+            logs.append(entry)
+            if len(logs) >= limit:
+                break
+        if not newest_first:
+            logs.reverse()
         return logs
 
     # ==================== Log Rotation & Archival ====================
@@ -670,14 +871,14 @@ class AuditService:
 
         Args:
             retention_days: Days to keep uncompressed JSONL files. Files older than
-                this are gzip-compressed. Files older than 2x this are deleted.
-            archive: If True, compress old files with gzip before eventual deletion.
-                If False, delete files past retention without compressing.
+                this are gzip-compressed. Files (plain or compressed) older than
+                2x this are deleted.
+            archive: If True, compress files past retention_days. If False, leave
+                them uncompressed until the 2x deletion horizon.
 
         Returns:
             Summary dict with counts of compressed, deleted, and skipped files.
         """
-        import gzip
         import shutil
 
         today = datetime.now(UTC).date()
@@ -686,36 +887,37 @@ class AuditService:
 
         stats: dict[str, Any] = {"compressed": 0, "deleted": 0, "skipped": 0, "errors": []}
 
-        for log_file in self.log_dir.glob("audit_*.jsonl"):
+        for log_file in sorted(self.log_dir.glob("audit_*.jsonl*")):
+            match = _LOG_FILE_RE.match(log_file.name)
+            if not match:
+                stats["skipped"] += 1
+                continue
             try:
-                file_date_str = log_file.stem.replace("audit_", "")
-                from datetime import datetime as dt
-
-                file_date = dt.strptime(file_date_str, "%Y-%m-%d").date()
+                file_date = datetime.strptime(match.group(1), "%Y-%m-%d").date()
             except ValueError:
                 stats["skipped"] += 1
                 continue
+            is_archive = bool(match.group(2))
 
             # Never touch today's active log
             if file_date >= today:
                 stats["skipped"] += 1
                 continue
 
-            # Delete very old compressed archives
-            gz_path = log_file.with_suffix(".jsonl.gz")
+            # Delete anything past the deletion horizon, archives included
             if file_date < delete_cutoff:
                 try:
-                    if gz_path.exists():
-                        gz_path.unlink()
-                    if log_file.exists():
-                        log_file.unlink()
+                    log_file.unlink()
                     stats["deleted"] += 1
+                except FileNotFoundError:
+                    pass
                 except OSError as e:
                     stats["errors"].append(f"Delete {log_file.name}: {e}")
                 continue
 
             # Compress files past retention that aren't already compressed
-            if file_date < compress_cutoff and archive:
+            if not is_archive and file_date < compress_cutoff and archive:
+                gz_path = log_file.with_name(log_file.name + ".gz")
                 if gz_path.exists():
                     # Already compressed — remove uncompressed original
                     try:
@@ -724,13 +926,24 @@ class AuditService:
                         pass
                     stats["skipped"] += 1
                     continue
+                # Write under a temporary name so an interrupted run never
+                # leaves a truncated archive that readers would pick up.
+                tmp_path = log_file.with_name(log_file.name + ".gz.tmp")
                 try:
-                    with open(log_file, "rb") as f_in, gzip.open(gz_path, "wb") as f_out:
+                    with open(log_file, "rb") as f_in, gzip.open(tmp_path, "wb") as f_out:
                         shutil.copyfileobj(f_in, f_out)
+                    tmp_path.replace(gz_path)
                     log_file.unlink()
                     stats["compressed"] += 1
                 except OSError as e:
                     stats["errors"].append(f"Compress {log_file.name}: {e}")
+                    try:
+                        tmp_path.unlink()
+                    except OSError:
+                        pass
+                continue
+
+            stats["skipped"] += 1
 
         # Prune audit_logs DB rows past the delete cutoff too, so the queryable
         # table doesn't grow unbounded alongside the rotated JSONL files. The

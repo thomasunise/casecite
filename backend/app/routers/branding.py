@@ -2,8 +2,10 @@
 Branding / White-Label Router
 
 Manage per-installation branding configuration (firm name, logo, colors, CSS).
-The GET endpoint is public so the frontend can style itself on load.
-All mutation endpoints require an admin role (branding is installation-wide).
+The GET endpoints (config + uploaded logo) are public so the frontend can
+style itself on load, before sign-in.
+All mutation endpoints require an admin role (branding is installation-wide)
+and are written to the audit trail.
 Delegates all persistence to the branding service.
 """
 
@@ -11,10 +13,13 @@ import logging
 import re
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse
 
 from app.models.responses.branding import BrandingLogoResponse
 from app.models.schemas import BrandingResponse, BrandingUpdate
+from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData
+from app.services.branding import ASSET_MEDIA_TYPES, resolve_asset_path
 from app.services.branding import (
     get_branding as _get_branding,
 )
@@ -29,6 +34,7 @@ from app.services.branding import (
 )
 from app.services.permissions import require_permission
 from app.utils.error_handler import handle_service_error
+from app.utils.ip_resolution import get_client_ip
 from app.utils.upload_validation import read_upload_capped
 
 logger = logging.getLogger(__name__)
@@ -43,23 +49,60 @@ def _sanitize_custom_css(css: str | None) -> str | None:
     who could set it might try to break out of the CSS context (``</style>...``)
     or use CSS-based script execution. We strip angle brackets (which have no
     legitimate use in CSS and enable </style> breakout) and known dangerous
-    constructs. This runs even though only admins can now set branding, as
-    defense in depth against an admin account compromise or CSRF.
+    constructs. External resource loads are removed too: this CSS is served
+    unauthenticated to the login page, so a ``url(https://...)`` would make
+    every visitor's browser call a third party (tracking / data exfiltration
+    via attribute selectors). Only same-origin paths and inline raster
+    ``data:`` images survive. This runs even though only admins can now set
+    branding, as defense in depth against an admin account compromise or CSRF.
     """
     if not css:
         return css
     # Remove anything that could close the style element or open a new tag.
     cleaned = css.replace("<", "").replace(">", "")
-    # Strip constructs that can execute script from within CSS. Deleting a match
-    # can splice a new one together (e.g. "javajavascript:script:"), so repeat
-    # until a full pass removes nothing (fixpoint) instead of a single pass.
-    dangerous = (r"(?i)javascript:", r"(?i)expression\s*\(", r"(?i)@import\b")
+    # Strip constructs that can execute script or load external resources from
+    # within CSS. Deleting a match can splice a new one together (e.g.
+    # "javajavascript:script:"), so repeat until a full pass removes nothing
+    # (fixpoint) instead of a single pass.
+    dangerous = (
+        r"(?i)javascript:",
+        r"(?i)expression\s*\(",
+        r"(?i)@import\b",
+        r"(?i)image-set\s*\(",  # takes bare-string URLs, bypassing url()
+    )
     while True:
         before = cleaned
         for pattern in dangerous:
             cleaned = re.sub(pattern, "", cleaned)
+        cleaned = _CSS_URL_RE.sub(_filter_css_url, cleaned)
         if cleaned == before:
             return cleaned
+
+
+_CSS_URL_RE = re.compile(r"(?is)url\s*\(\s*(.*?)\s*\)")
+_CSS_DATA_IMAGE_RE = re.compile(r"(?i)^data:image/(png|jpeg|gif|webp);base64,[a-z0-9+/=\s]+$")
+
+
+def _filter_css_url(match: re.Match) -> str:
+    """Keep a CSS url() only when it is same-origin or an inline raster image."""
+    target = match.group(1).strip().strip("\"'").strip()
+    same_origin = target.startswith("/") and not target.startswith("//")
+    # A backslash is a CSS escape — "\68ttps://" decodes to "https://" — so any
+    # escaped target is rejected rather than decoded.
+    if "\\" not in target and (same_origin or _CSS_DATA_IMAGE_RE.match(target)):
+        return match.group(0)
+    return "none"
+
+
+async def _audit_branding(request: Request, current_user: TokenData, action: str) -> None:
+    await audit_service.log_event(
+        event_type=AuditEventType.SETTINGS_CHANGE,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="branding",
+        ip_address=get_client_ip(request),
+        details={"action": action},
+    )
 
 
 # =============================================================================
@@ -79,9 +122,33 @@ async def get_branding() -> BrandingResponse:
     return await _get_branding()
 
 
+@router.get("/assets/{filename}", include_in_schema=False)
+async def get_branding_asset(filename: str) -> FileResponse:
+    """Serve an uploaded logo. Public, like GET /branding (the login page shows it).
+
+    Only server-generated ``brand_logo_<hex>.<ext>`` names resolve; anything
+    else is a 404, so this cannot read other files off the data volume.
+    """
+    path = resolve_asset_path(filename)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(
+        path,
+        media_type=ASSET_MEDIA_TYPES[path.suffix],
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            # An SVG opened directly is a document in the app origin; forbid
+            # everything so it can only ever render as a static image.
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
+
+
 @router.put("", response_model=BrandingResponse)
 async def update_branding(
     body: BrandingUpdate,
+    request: Request,
     current_user: TokenData = require_permission("admin.settings"),
 ) -> BrandingResponse:
     """
@@ -92,7 +159,7 @@ async def update_branding(
     unchanged.
     """
     try:
-        return await _update_branding(
+        result = await _update_branding(
             firm_name=body.firm_name,
             logo_url=body.logo_url,
             primary_color=body.primary_color,
@@ -103,6 +170,8 @@ async def update_branding(
         )
     except (OSError, RuntimeError, ConnectionError, TimeoutError) as exc:
         raise handle_service_error(exc, "Failed to save branding", logger)
+    await _audit_branding(request, current_user, "branding_updated")
+    return result
 
 
 def _validate_logo_bytes(content_type: str, contents: bytes) -> None:
@@ -176,13 +245,18 @@ async def upload_logo(
     # neutralize script-bearing SVGs (stored-XSS in the app origin).
     _validate_logo_bytes(file.content_type, contents)
 
-    logo_url = await _upload_logo(contents, file.content_type)
+    try:
+        logo_url = await _upload_logo(contents, file.content_type)
+    except OSError as exc:
+        raise handle_service_error(exc, "Failed to save logo", logger)
     logger.info("Logo uploaded by user %s", current_user.user_id)
+    await _audit_branding(request, current_user, "branding_logo_uploaded")
     return {"status": "uploaded", "logo_url": logo_url}
 
 
 @router.post("/reset", response_model=BrandingResponse)
 async def reset_branding(
+    request: Request,
     current_user: TokenData = require_permission("admin.settings"),
 ) -> BrandingResponse:
     """
@@ -190,4 +264,6 @@ async def reset_branding(
 
     Admin only. Clears all custom branding and restores built-in defaults.
     """
-    return await _reset_branding()
+    result = await _reset_branding()
+    await _audit_branding(request, current_user, "branding_reset")
+    return result

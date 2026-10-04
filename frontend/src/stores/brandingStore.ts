@@ -111,7 +111,6 @@ const DEFAULT_BRANDING: BrandingConfig = {
   secondary_color: '#0A0A0A',
   accent_color: '#737373',
   favicon_url: null,
-  custom_css: null,
   updated_at: null,
 };
 

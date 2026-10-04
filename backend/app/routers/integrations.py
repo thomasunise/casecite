@@ -11,7 +11,7 @@ import json
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.config import settings
 from app.services import connector_credentials, llm_clients
@@ -102,7 +102,16 @@ async def clear_courtlistener_token(
 
 
 class ConnectorCredentialsRequest(BaseModel):
-    values: dict[str, str] = Field(..., description="settings-field -> value for this provider")
+    values: dict[str, str] = Field(
+        ..., max_length=20, description="settings-field -> value for this provider"
+    )
+
+    @field_validator("values")
+    @classmethod
+    def _bounded_values(cls, v: dict[str, str]) -> dict[str, str]:
+        if any(len(k) > 100 or len(val) > 2000 for k, val in v.items()):
+            raise ValueError("a credential value is too long")
+        return v
 
 
 @router.get("/connectors")
@@ -178,6 +187,14 @@ class LocalLLMRequest(BaseModel):
     base_url: str = Field(..., min_length=4, max_length=400)  # e.g. http://localhost:11434/v1
     chat_model: str = Field(..., min_length=1, max_length=120)
     utility_model: str | None = Field(None, max_length=120)
+
+    @field_validator("base_url")
+    @classmethod
+    def _http_url(cls, v: str) -> str:
+        v = v.strip()
+        if not v.lower().startswith(("http://", "https://")):
+            raise ValueError("base_url must start with http:// or https://")
+        return v
 
 
 @router.get("/local-llm")

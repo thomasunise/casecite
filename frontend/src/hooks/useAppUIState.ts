@@ -11,15 +11,13 @@ import type { Citation } from '../types';
  */
 export function useAppUIState({
   setSelectedCitation, setShowSignupModal, setShowLoginModal,
-  setShowPickerModal, setShowProvidersModal, setShowCaseComparison,
+  setShowPickerModal,
   setActiveMode, inputRef,
 }: {
   setSelectedCitation: (val: Citation | null) => void;
   setShowSignupModal: (val: boolean) => void;
   setShowLoginModal: (val: boolean) => void;
   setShowPickerModal: (val: boolean) => void;
-  setShowProvidersModal: (val: boolean) => void;
-  setShowCaseComparison: (val: boolean) => void;
   setActiveMode: (mode: string) => void;
   inputRef: React.RefObject<HTMLElement | null>;
 }) {
@@ -40,9 +38,7 @@ export function useAppUIState({
     setShowSignupModal(false);
     setShowLoginModal(false);
     setShowPickerModal(false);
-    setShowProvidersModal(false);
-    setShowCaseComparison(false);
-  }, [setShowSettings, setSelectedCitation, setShowSignupModal, setShowLoginModal, setShowPickerModal, setShowProvidersModal, setShowCaseComparison]);
+  }, [setShowSettings, setSelectedCitation, setShowSignupModal, setShowLoginModal, setShowPickerModal]);
 
   // Global keyboard shortcuts
   const modeIds = useMemo(() => ANALYSIS_MODES.map(m => m.id), []);

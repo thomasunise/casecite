@@ -3,7 +3,6 @@
 import json
 
 import pytest
-
 from app.services import permissions as perm
 
 

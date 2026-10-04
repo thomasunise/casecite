@@ -17,6 +17,10 @@ Object.assign(api, {
     return api.request(`/jobs/${jobId}`);
   },
 
+  async deleteAuthorityMap(runId: string): Promise<{ status: string; id: string }> {
+    return api.request(`/authority-map/${encodeURIComponent(runId)}`, { method: 'DELETE' });
+  },
+
   async getCaseOpinion(opinionId: string): Promise<{ case_name?: string; opinion_text?: string; syllabus?: string; [k: string]: unknown }> {
     return api.request(`/tools/cases/${opinionId}`);
   },

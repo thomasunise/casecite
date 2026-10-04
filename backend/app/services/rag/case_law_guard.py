@@ -58,8 +58,47 @@ _WL_CITE_RE = re.compile(r"\b(?:19|20)\d{2}\s+WL\s+\d{1,9}\b")
 # words so the match never trails off into ordinary prose.
 _CONNECTOR = r"(?:of|the|and|for|in|de|del|la|van|von|ex|rel\.?)"
 _WORD = r"[A-Z][A-Za-z'’&.-]*"
-_PARTY = rf"{_WORD}(?:\s+(?:{_CONNECTOR}\s+)?{_WORD}){{0,5}}"
-_CASE_NAME_RE = re.compile(rf"\b({_PARTY})\s+vs?\.?\s+({_PARTY})")
+# Horizontal whitespace only: a case name never spans a line break, and
+# letting it do so swallowed a heading above "Per Smith v. Jones" into the
+# match (and into the redaction).
+_GAP = r"[^\S\r\n]+"
+_PARTY = rf"{_WORD}(?:{_GAP}(?:{_CONNECTOR}{_GAP})?{_WORD}){{0,5}}"
+_CASE_NAME_RE = re.compile(rf"\b({_PARTY}){_GAP}vs?\.?{_GAP}({_PARTY})")
+
+# Single-party captions: "In re Smith", "In the Matter of Smith", "Matter of
+# Smith", "Ex parte Young". Matched in their conventional capitalization only
+# ("Ex Parte Application" is a document title, "ex parte order" an adjective).
+_SINGLE_PARTY_RE = re.compile(
+    rf"\b(In{_GAP}[Rr]e|In{_GAP}the{_GAP}Matter{_GAP}of|Matter{_GAP}of|Ex{_GAP}parte)"
+    rf"{_GAP}({_PARTY})"
+)
+
+# Capitalized words the party regex can pick up from the surrounding sentence
+# ("In Smith v. Jones", "See Roe v. Wade") that are not part of the name.
+_LEAD_IN_WORDS = {
+    "in",
+    "see",
+    "under",
+    "as",
+    "per",
+    "but",
+    "and",
+    "also",
+    "cf",
+    "unlike",
+    "like",
+    "following",
+    "citing",
+    "compare",
+    "with",
+    "accord",
+    "contra",
+    "although",
+    "while",
+    "since",
+    "because",
+    "the",
+}
 
 
 def _normalize(text: str) -> str:
@@ -70,26 +109,95 @@ def _normalize(text: str) -> str:
     return t
 
 
-def _allowed_parts(
-    case_law_results: list[dict[str, Any]] | None,
-    search_results: list[dict[str, Any]] | None,
-) -> list[str]:
-    """Normalized texts a case reference may legitimately come from."""
-    parts: list[str] = []
-    for result in case_law_results or []:
-        metadata = result.get("metadata") or {}
-        for key in ("case_name", "citation", "filename"):
-            if metadata.get(key):
-                parts.append(str(metadata[key]))
-        if result.get("text"):
-            parts.append(str(result["text"]))
-    for result in search_results or []:
-        if result.get("text"):
-            parts.append(str(result["text"]))
-        metadata = result.get("metadata") or {}
-        if metadata.get("filename"):
-            parts.append(str(metadata["filename"]))
-    return [_normalize(p) for p in parts if p]
+class _Sources:
+    """What a case reference in the answer may legitimately be traced to."""
+
+    def __init__(
+        self,
+        case_law_results: list[dict[str, Any]] | None,
+        search_results: list[dict[str, Any]] | None,
+    ):
+        # Case names of this request's CourtListener results: (left, right)
+        # word sets for "A v. B" captions. These are trusted names, so the
+        # answer may shorten them ("Smith v. Jones" for "John Smith v. Acme
+        # Jones Corp.") as long as every party word it uses belongs to them.
+        self.names: list[tuple[set[str], set[str]]] = []
+        # Every normalized text a reference may appear in verbatim: the names
+        # and citations above, opinion text, and the user's own passages
+        # (client filings legitimately quote and discuss cases).
+        self.texts: list[str] = []
+
+        for result in case_law_results or []:
+            metadata = result.get("metadata") or {}
+            for key in ("case_name", "citation", "filename"):
+                if metadata.get(key):
+                    self._add_text(str(metadata[key]))
+            for key in ("case_name", "filename"):
+                if metadata.get(key):
+                    self._add_name(str(metadata[key]))
+            if result.get("text"):
+                self._add_text(str(result["text"]))
+        for result in search_results or []:
+            if result.get("text"):
+                self._add_text(str(result["text"]))
+            metadata = result.get("metadata") or {}
+            if metadata.get("filename"):
+                self._add_text(str(metadata["filename"]))
+
+    def _add_text(self, text: str) -> None:
+        normalized = _normalize(text)
+        if normalized:
+            # Padded so " phrase " membership is a whole-word phrase match.
+            self.texts.append(f" {normalized} ")
+
+    def _add_name(self, name: str) -> None:
+        # Drop a trailing "(123 F.3d 456)" citation from filename-style names.
+        left, sep, right = _normalize(name.split("(")[0]).partition(" v ")
+        if sep and left and right:
+            self.names.append((set(left.split()), set(right.split())))
+
+    def has_phrase(self, phrase: str) -> bool:
+        """True when ``phrase`` occurs as whole words in any source text."""
+        needle = f" {phrase} "
+        return any(needle in text for text in self.texts)
+
+    def allows_case_name(self, party1: str, party2: str) -> bool:
+        """Is "party1 v. party2" traceable to a source as a CASE NAME?
+
+        The two party strings each appearing somewhere in the sources is not
+        enough — "State" and "Smith" occur in almost any legal text. The
+        reference must match a retrieved case's caption party-for-party, or
+        appear in a source text as the contiguous phrase "<party1> v <party2>".
+        """
+        p1 = _normalize(party1).split()
+        p2 = _normalize(party2).split()
+        # Sentence lead-ins captured ahead of the name are not part of it.
+        while len(p1) > 1 and p1[0] in _LEAD_IN_WORDS:
+            p1 = p1[1:]
+        if not p1 or not p2:
+            return False
+
+        for left, right in self.names:
+            # Every word of the first party must belong to the caption's first
+            # party; the second party must START with one of its words (what
+            # follows may be sentence text the pattern swept up: "Jones. The").
+            if all(word in left for word in p1) and p2[0] in right:
+                return True
+
+        return self.has_phrase(f"{' '.join(p1)} v {p2[0]}")
+
+    def allows_single_party(self, prefix: str, party: str) -> bool:
+        """Is an "In re X" / "Matter of X" / "Ex parte X" caption in a source?"""
+        words = _normalize(party).split()
+        if not words:
+            return False
+        kind = _normalize(prefix)
+        variants = [kind]
+        if kind == "in the matter of":
+            variants.append("matter of")
+        elif kind == "matter of":
+            variants.append("in the matter of")
+        return any(self.has_phrase(f"{variant} {words[0]}") for variant in variants)
 
 
 def _merge_spans(spans: list[tuple[int, int]], content: str) -> list[tuple[int, int]]:
@@ -108,28 +216,34 @@ def _merge_spans(spans: list[tuple[int, int]], content: str) -> list[tuple[int, 
     return merged
 
 
+def _trim_trailing_punctuation(content: str, start: int, end: int) -> int:
+    """Party words may match abbreviation periods; don't let the span swallow
+    trailing sentence punctuation ("Roe v. Wade.")."""
+    while end > start and content[end - 1] in ".,;:":
+        end -= 1
+    return end
+
+
 def find_unverified_case_references(
     content: str,
     case_law_results: list[dict[str, Any]] | None = None,
     search_results: list[dict[str, Any]] | None = None,
 ) -> list[tuple[int, int]]:
     """Spans of case references in ``content`` not traceable to any source."""
-    parts = _allowed_parts(case_law_results, search_results)
+    sources = _Sources(case_law_results, search_results)
     spans: list[tuple[int, int]] = []
 
     for m in _CASE_NAME_RE.finditer(content):
-        p1, p2 = _normalize(m.group(1)), _normalize(m.group(2))
-        if not any(p1 in part and p2 in part for part in parts):
-            # Party words may match abbreviation periods; don't let the span
-            # swallow trailing sentence punctuation ("Roe v. Wade.").
-            end = m.end()
-            while end > m.start() and content[end - 1] in ".,;:":
-                end -= 1
-            spans.append((m.start(), end))
+        if not sources.allows_case_name(m.group(1), m.group(2)):
+            spans.append((m.start(), _trim_trailing_punctuation(content, m.start(), m.end())))
+
+    for m in _SINGLE_PARTY_RE.finditer(content):
+        if not sources.allows_single_party(m.group(1), m.group(2)):
+            spans.append((m.start(), _trim_trailing_punctuation(content, m.start(), m.end())))
 
     for regex in (_REPORTER_CITE_RE, _WL_CITE_RE):
         for m in regex.finditer(content):
-            if not any(_normalize(m.group(0)) in part for part in parts):
+            if not sources.has_phrase(_normalize(m.group(0))):
                 spans.append((m.start(), m.end()))
 
     return _merge_spans(spans, content)

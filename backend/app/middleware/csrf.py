@@ -54,6 +54,19 @@ def request_is_https(request: Request) -> bool:
     return request.url.scheme == "https"
 
 
+def cookie_secure(request: Request) -> bool:
+    """Secure flag for the cookies this app sets.
+
+    Production (DEBUG=false) always sets Secure: the forwarded-proto header is
+    not a reliable signal (a proxy hop that overwrites X-Forwarded-Proto with
+    its own plain-HTTP scheme would otherwise strip the flag from auth cookies
+    behind a TLS-terminating edge), and production must be served over TLS
+    anyway. Local development falls back to the observed scheme so cookies
+    still work over plain http://localhost.
+    """
+    return (not settings.debug) or request_is_https(request)
+
+
 def generate_signed_csrf_token() -> str:
     """Generate and sign a new CSRF token (for use outside middleware)."""
     token = secrets.token_urlsafe(32)
@@ -110,7 +123,6 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             "/api/v1/connectors/microsoft/callback",
             "/api/v1/connectors/dropbox/callback",
             "/api/v1/connectors/box/callback",
-            "/api/v1/auth/azure/callback",
             # CSRF token endpoint (handles its own cookie setting)
             "/api/v1/csrf-token",
         }
@@ -181,7 +193,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
                     key=self.cookie_name,
                     value=csrf_token,
                     httponly=False,  # Must be readable by JavaScript
-                    secure=request_is_https(request),  # Secure only when served over HTTPS
+                    secure=cookie_secure(request),  # always Secure in production
                     samesite="lax",  # "lax" allows OAuth callback flows; "strict" would block them
                     max_age=3600,  # 1 hour
                     path="/",
@@ -214,7 +226,7 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             logger.warning(f"CSRF validation failed: invalid signature for {method} {path}")
             return JSONResponse(
                 status_code=403,
-                content={"detail": "CSRF token expired. Please refresh the page and try again."},
+                content={"detail": "CSRF token invalid. Please refresh the page and try again."},
             )
 
         # CSRF validation passed
@@ -261,7 +273,7 @@ def get_csrf_router():
             key="_csrf",
             value=token,
             httponly=False,  # Must be readable by JavaScript
-            secure=request_is_https(request),  # Secure only when served over HTTPS
+            secure=cookie_secure(request),  # always Secure in production
             samesite="lax",
             max_age=3600,
             path="/",

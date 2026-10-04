@@ -34,6 +34,16 @@ describe('SourcesList', () => {
     expect(screen.getByText('Run a search to see cited sources')).toBeTruthy();
   });
 
+  it('marks a below-threshold source as a weak match, without a score', () => {
+    const citations = [
+      { id: '1', source: 'Lease.pdf', type: 'document', confidence: 18, similarity: 0.18, weakMatch: true },
+    ];
+    const { container } = render(<SourcesList {...defaultProps({ allCitations: citations })} />);
+    expect(screen.getByText('Weak match')).toBeTruthy();
+    expect(container.textContent).not.toContain('%');
+    expect(container.textContent).not.toContain('0.18');
+  });
+
   it('renders citations when provided', () => {
     const citations = [
       { id: '1', source: 'Miranda v. Arizona', type: 'case_law', confidence: 95, was_cited_by_ai: true },

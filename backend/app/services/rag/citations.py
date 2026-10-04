@@ -119,8 +119,10 @@ def build_document_citations(
         metadata = result.get("metadata", {})
         passage_text = result.get("text", "")
         filename = metadata.get("filename", "Unknown Source")
-        similarity = result["similarity"]
+        # The retrieval score as measured — never a default or a constant.
+        similarity = float(result.get("similarity") or 0.0)
         confidence = min(100, max(0, int(similarity * 100)))
+        weak_match = bool(metadata.get("below_threshold"))
 
         passage_preview = passage_text[:150].replace("\n", " ").strip()
         key_phrases = extract_key_phrases(passage_text, query)
@@ -155,13 +157,18 @@ def build_document_citations(
                 ReasoningStep(
                     type="Relevance Ranking",
                     description=f"Ranked #{result['rank']} out of {len(search_results)} document matches based on similarity score",
-                    evidence=f"This passage scored {similarity:.3f} similarity ({confidence}% confidence)",
+                    evidence=f"This passage scored {similarity:.3f} vector similarity"
+                    + (" — below your similarity threshold (weak match)" if weak_match else ""),
                 ),
             ],
             logic=CitationLogic(
                 query_intent=f"User seeking information about: {query[:100]}",
                 matching_criteria=f"Vector similarity: {similarity:.3f} | Document type: {metadata.get('doc_type', 'document')} | Source: {metadata.get('source', 'local')}",
-                application=f"This passage from '{filename}' directly addresses the query by discussing: {passage_preview[:100]}...",
+                application=(
+                    f"Retrieved from '{filename}' because it is semantically similar to "
+                    f"the question (score {similarity:.2f}). This records why the passage "
+                    "was retrieved; it is not a finding that the passage answers the question."
+                ),
             ),
             document_id=metadata.get("document_id"),
             url=metadata.get("url"),
@@ -194,8 +201,47 @@ def build_case_law_citations(
         citation_str = metadata.get("citation", "No citation")
         date_filed = metadata.get("date_filed", "Unknown date")
         case_summary = metadata.get("case_summary") or None
-        similarity = result.get("similarity", 0.5)
+        # A score exists only when the relevance screen (or the deep-research
+        # judge) gave one. Without it the numeric fields are 0 — "no score",
+        # never a made-up midpoint — and the text below says so instead of
+        # printing "0.00".
+        raw_score = result.get("similarity")
+        has_score = isinstance(raw_score, (int, float)) and raw_score > 0
+        similarity = float(raw_score) if has_score else 0.0
         confidence = min(100, max(0, int(similarity * 100)))
+        quote_verified = bool(metadata.get("quote_verified"))
+        screened = has_score or bool(case_summary)
+        rank_label = f"listed #{result.get('rank', i + 1)} among case-law results"
+        if quote_verified:
+            screening_note = (
+                "Supporting quote verified verbatim against the full opinion"
+                + (f"; relevance rated {similarity:.2f}" if has_score else "")
+                + f"; {rank_label}"
+            )
+            application_note = (
+                "The supporting quote was verified verbatim against the full opinion"
+                + (f" (relevance rated {similarity:.2f})" if has_score else "")
+                + ". Check the opinion's current treatment before relying on it."
+            )
+        elif screened:
+            screening_note = (
+                "Kept by the relevance screen"
+                + (f" with score {similarity:.2f}" if has_score else "")
+                + f"; {rank_label}"
+            )
+            application_note = (
+                "Kept by the relevance screen as on-topic"
+                + (f" (score {similarity:.2f})" if has_score else "")
+                + ". Read the opinion and check its current treatment before relying on it."
+            )
+        else:
+            screening_note = (
+                f"Keyword-search hit that was NOT screened for relevance ({rank_label})"
+            )
+            application_note = (
+                "Returned by a CourtListener keyword search and not screened for "
+                "relevance — treat it as a lead to check, not as authority."
+            )
 
         passage_preview = (
             passage_text[:150].replace("\n", " ").strip()
@@ -230,22 +276,24 @@ def build_case_law_citations(
                     evidence=f"Official citation: {citation_str}",
                 ),
                 ReasoningStep(
-                    type="Content Relevance",
-                    description="Analyzed case content for relevance to query",
-                    evidence=f'Relevant excerpt: "{passage_preview}{"..." if len(passage_text) > 150 else ""}"'
+                    type="Opinion Excerpt",
+                    description="Excerpt of the opinion text retrieved from CourtListener",
+                    evidence=f'"{passage_preview}{"..." if len(passage_text) > 150 else ""}"'
                     if passage_text
-                    else "Matched on case name and legal subject matter",
+                    else "No opinion text was retrieved for this result",
                 ),
                 ReasoningStep(
-                    type="Precedential Value",
-                    description=f"Ranked #{result.get('rank', i + 1)} among case law results based on relevance",
-                    evidence=f"Key legal concepts: {', '.join(key_phrases[:4]) if key_phrases else 'General subject matter relevance'}",
+                    type="Relevance Screening",
+                    description=screening_note,
+                    evidence=f"Terms shared with the question: {', '.join(key_phrases[:4])}"
+                    if key_phrases
+                    else None,
                 ),
             ],
             logic=CitationLogic(
                 query_intent=f"Searching for case law precedent related to: {query[:80]}",
                 matching_criteria=f"Court: {court} | Citation: {citation_str} | Date: {date_filed} | Relevance rank: #{result.get('rank', i + 1)}",
-                application=f"This case from {court} may provide precedential guidance. The opinion discusses matters relevant to the query.",
+                application=application_note,
             ),
             document_id=None,
             notes=f"CourtListener URL: {metadata.get('url', '')}",

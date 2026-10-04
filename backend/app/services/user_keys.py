@@ -15,7 +15,7 @@ from anthropic import Anthropic, AsyncAnthropic
 from fastapi import Depends, Request
 from openai import AsyncOpenAI, OpenAI
 
-from app.config import settings
+from app.config import is_placeholder_api_key, settings
 from app.services.auth import TokenData, get_current_user
 
 logger = logging.getLogger(__name__)
@@ -116,9 +116,13 @@ class UserAPIKeys:
         if len(key) < 10 or len(key) > 256:
             logger.warning("Invalid %s key length: %d", provider, len(key))
             return None
-        # Provider-specific prefix checks
+        if is_placeholder_api_key(key):
+            logger.warning("Ignoring placeholder %s key", provider)
+            return None
+        # Provider-specific prefix checks. The OpenAI slot has none: it also
+        # carries keys for OpenAI-compatible gateways (Groq "gsk_", Together,
+        # OpenRouter "sk-or-", ...) whose keys do not start with "sk-".
         prefix_checks = {
-            "openai": ("sk-",),
             "anthropic": ("sk-ant-",),
             "voyage": ("pa-", "vo-"),
         }
@@ -143,21 +147,6 @@ class UserAPIKeys:
             self.google = None
         if self.cohere and (len(self.cohere.strip()) < 10 or len(self.cohere.strip()) > 256):
             self.cohere = None
-
-    def has_openai(self) -> bool:
-        return bool(self.openai)
-
-    def has_anthropic(self) -> bool:
-        return bool(self.anthropic)
-
-    def has_google(self) -> bool:
-        return bool(self.google)
-
-    def has_voyage(self) -> bool:
-        return bool(self.voyage)
-
-    def has_cohere(self) -> bool:
-        return bool(self.cohere)
 
     def get_openai_client(self) -> OpenAI | None:
         """Create sync OpenAI client with the user key, or the instance endpoint."""
@@ -189,16 +178,21 @@ class UserAPIKeys:
             )
         return None
 
-    def get_google_model(self, model_name: str = "gemini-3.1-pro-preview"):
+    def get_google_model(self, model_name: str | None = None):
         """Create Google Generative AI model with user key.
 
-        Returns an adapter over the new-SDK ``genai.Client`` or a per-key
-        ``GenerativeModel``-shaped REST wrapper — both expose the same
-        ``generate_content`` interface — so that each request uses its own API
-        key with no global-state leakage between concurrent users.
+        ``model_name`` is the Gemini model the user selected; it defaults to
+        ``settings.gemini_model`` when the caller has no specific choice.
+
+        Returns an adapter over the google-genai ``Client``, or (when that SDK
+        is not importable) a per-key REST wrapper — both expose the same
+        ``generate_content(prompt) -> response.text`` interface — so that each
+        request uses its own API key with no global-state leakage between
+        concurrent users.
         """
         if not self.google:
             return None
+        model_name = model_name or settings.gemini_model
 
         # Prefer the new google-genai SDK which supports per-client API keys
         try:
@@ -213,12 +207,9 @@ class UserAPIKeys:
         except (ImportError, TypeError, AttributeError):
             pass
 
-        # Fallback: legacy google-generativeai SDK — use the REST transport
-        # directly via httpx to avoid the process-global configure() call.
-        try:
-            return _IsolatedGeminiModel(api_key=self.google, model_name=model_name)
-        except (ValueError, TypeError, AttributeError):
-            return None
+        # Fallback when google-genai is not importable: call the REST API
+        # directly via httpx (no SDK, no process-global configure() call).
+        return _IsolatedGeminiModel(api_key=self.google, model_name=model_name)
 
 
 class _GenAIModelAdapter:
@@ -234,20 +225,33 @@ class _GenAIModelAdapter:
         return self._client.models.generate_content(model=self._model_name, contents=contents)
 
 
-class _IsolatedGeminiModel:
-    """Thin REST wrapper for Gemini that avoids the global ``genai.configure()`` call.
+class _GeminiRestResponse:
+    """The slice of a Gemini response the RAG pipeline reads: ``.text``."""
 
-    Provides a ``generate_content`` interface compatible with the legacy
-    ``google.generativeai.GenerativeModel`` so callers don't need to change.
+    def __init__(self, payload: dict):
+        self.payload = payload
+        parts: list[str] = []
+        for candidate in payload.get("candidates") or []:
+            for part in (candidate.get("content") or {}).get("parts") or []:
+                if isinstance(part, dict) and part.get("text"):
+                    parts.append(str(part["text"]))
+        self.text = "".join(parts)
+
+
+class _IsolatedGeminiModel:
+    """Thin REST wrapper for Gemini, used when the google-genai SDK is absent.
+
+    Provides the same ``generate_content(prompt) -> response.text`` interface
+    as :class:`_GenAIModelAdapter` so callers don't need to change.
     """
 
     _BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-    def __init__(self, api_key: str, model_name: str = "gemini-3.1-pro-preview"):
+    def __init__(self, api_key: str, model_name: str | None = None):
         self._api_key = api_key
-        self._model_name = model_name
+        self._model_name = model_name or settings.gemini_model
 
-    def generate_content(self, prompt: str | list, **kwargs):
+    def generate_content(self, prompt: str | list, **kwargs) -> _GeminiRestResponse:
         """Synchronous content generation via REST (no global state)."""
         import httpx
 
@@ -260,22 +264,7 @@ class _IsolatedGeminiModel:
             timeout=settings.api_timeout,
         )
         resp.raise_for_status()
-        return resp.json()
-
-    async def generate_content_async(self, prompt: str | list, **kwargs):
-        """Async content generation via REST (no global state)."""
-        import httpx
-
-        contents = [{"parts": [{"text": prompt if isinstance(prompt, str) else str(prompt)}]}]
-        url = f"{self._BASE}/{self._model_name}:generateContent"
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(
-                url,
-                json={"contents": contents},
-                headers={"x-goog-api-key": self._api_key},
-            )
-        resp.raise_for_status()
-        return resp.json()
+        return _GeminiRestResponse(resp.json())
 
 
 def get_user_keys(

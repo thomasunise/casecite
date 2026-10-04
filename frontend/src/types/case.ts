@@ -27,21 +27,3 @@ export interface CaseMessage {
   content: string;
 }
 
-export interface CaseComparisonPassage {
-  source: string;
-  text: string;
-}
-
-export interface CaseComparisonData {
-  case_name: string;
-  case_citation?: string;
-  strength_rating: string;
-  documents_searched: number;
-  confidence_score: number;
-  key_holdings?: string[];
-  applicability_analysis?: string;
-  supporting_points?: string[];
-  distinguishing_factors?: string[];
-  relevant_doc_passages?: CaseComparisonPassage[];
-  recommendation?: string;
-}

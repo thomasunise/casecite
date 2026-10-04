@@ -2,22 +2,12 @@
 Integration tests for the SystemRouter (/, /health, /ready, /metrics).
 """
 
-import os
-
-os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
-os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
-os.environ["DEBUG"] = "true"
-
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from app import __version__
 
-
-@pytest.fixture(autouse=True)
-def _bypass_session_validation():
-    """Bypass session validation so auth_headers work in tests."""
-    with patch("app.middleware.security.session_manager.validate_session", return_value=True):
-        yield
+pytestmark = pytest.mark.usefixtures("no_rate_limit")
 
 
 class TestSystemRouter:
@@ -31,9 +21,9 @@ class TestSystemRouter:
             resp = client.get("/")
             assert resp.status_code == 200
             data = resp.json()
-            assert "name" in data
-            assert "status" in data
+            assert data["name"] == "CaseCite"
             assert data["status"] == "running"
+            assert data["version"] == __version__ == "1.2.0"
 
     # ==================== Health Check ====================
 
@@ -177,3 +167,174 @@ class TestSystemRouter:
             assert data["documents"]["total_count"] == 1
             assert data["documents"]["indexed_count"] == 1
             assert data["documents"]["total_chunks"] == 10
+
+
+class TestSystemRouterProduction:
+    """/health and /metrics with DEBUG off — the token-gated branches, which
+    debug mode short-circuits and the tests above therefore never reach."""
+
+    @pytest.fixture(autouse=True)
+    def _production(self, client):
+        # `client` first: the app must finish starting before its services are mocked.
+        from app.config import settings
+
+        # Settings is frozen; swap the router's module-level reference for a copy.
+        prod = settings.model_copy(update={"debug": False, "redis_url": None})
+        with (
+            patch("app.routers.system.settings", prod),
+            patch("app.services.documents.document_service") as mock_docs,
+            patch("app.services.vectordb.get_vector_db") as mock_vdb,
+        ):
+            mock_docs.documents = {}
+            mock_db = AsyncMock()
+            mock_db.get_stats = AsyncMock(return_value={"total_chunks": 0})
+            mock_vdb.return_value = mock_db
+            yield
+
+    # ==================== Health Check ====================
+
+    def test_health_is_minimal_without_token(self, client):
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] in ("healthy", "degraded")
+        assert data["components"] is None
+        # No version / build fingerprint for unauthenticated callers.
+        assert data["version"] is None
+        assert data["build"] is None
+        assert data["environment"] is None
+        assert data["started_at"]  # public: lets an operator spot multiple containers
+
+    def test_health_shows_version_and_build_to_admin(self, client, auth_headers):
+        data = client.get("/health", headers=auth_headers).json()
+        assert data["version"] == __version__
+        assert data["build"]
+        assert data["environment"] == "production"
+        assert data["components"]["llm"]["byok"] is True
+
+    def test_health_accepts_the_session_cookie(self, client, auth_headers):
+        """The browser session (httpOnly cookie) is honoured, not only a Bearer header."""
+        token = auth_headers["Authorization"].removeprefix("Bearer ")
+        client.cookies.set("access_token", token)
+        try:
+            resp = client.get("/health")
+        finally:
+            client.cookies.clear()
+        assert resp.status_code == 200
+        assert resp.json()["components"] is not None
+
+    def test_health_is_healthy_without_a_server_llm_key(self, client):
+        """BYOK-only is a supported configuration, not a degraded one."""
+        from app.config import settings
+
+        byok = settings.model_copy(
+            update={
+                "debug": False,
+                "redis_url": None,
+                "openai_api_key": None,
+                "anthropic_api_key": None,
+            }
+        )
+        with (
+            patch("app.routers.system.settings", byok),
+            patch("app.database.async_engine") as mock_engine,
+        ):
+            mock_conn = AsyncMock()
+            mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+            mock_conn.__aexit__ = AsyncMock(return_value=False)
+            mock_engine.connect.return_value = mock_conn
+            assert client.get("/health").json()["status"] == "healthy"
+            ready = client.get("/ready")
+            assert ready.status_code == 200
+            assert ready.json() == {"ready": True, "issues": None}
+
+    def test_health_is_degraded_when_vector_db_is_missing(self, client):
+        with patch("app.services.vectordb.get_vector_db", return_value=None):
+            assert client.get("/health").json()["status"] == "degraded"
+
+    def test_health_survives_an_unexpected_probe_error(self, client):
+        """A driver-specific exception must degrade the probe, not 500 it."""
+
+        class DriverError(Exception):
+            pass
+
+        with patch("app.services.vectordb.get_vector_db", side_effect=DriverError("boom")):
+            resp = client.get("/health")
+            assert resp.status_code == 200
+            assert resp.json()["status"] == "degraded"
+            assert client.get("/ready").status_code == 503
+
+    def test_health_shows_components_to_admin(self, client, auth_headers):
+        resp = client.get("/health", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["components"] is not None
+
+    def test_health_hides_components_from_non_admin(self, client, non_admin_headers):
+        resp = client.get("/health", headers=non_admin_headers)
+        assert resp.status_code == 200
+        assert resp.json()["components"] is None
+
+    def test_health_survives_invalid_token(self, client):
+        """A probe carrying a stale token still gets its 200, just no details."""
+        resp = client.get("/health", headers={"Authorization": "Bearer not-a-real-token"})
+        assert resp.status_code == 200
+        assert resp.json()["components"] is None
+
+    # ==================== Metrics ====================
+
+    def test_metrics_requires_token(self, client):
+        assert client.get("/metrics").status_code == 401
+
+    def test_metrics_rejects_invalid_token(self, client):
+        resp = client.get("/metrics", headers={"Authorization": "Bearer not-a-real-token"})
+        assert resp.status_code == 401
+
+    def test_metrics_rejects_non_admin(self, client, non_admin_headers):
+        assert client.get("/metrics", headers=non_admin_headers).status_code == 403
+
+    def test_metrics_allows_admin(self, client, auth_headers):
+        resp = client.get("/metrics", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["application"]["environment"] == "production"
+        assert resp.json()["application"]["version"] == __version__
+
+    def test_metrics_accepts_the_session_cookie(self, client, auth_headers):
+        token = auth_headers["Authorization"].removeprefix("Bearer ")
+        client.cookies.set("access_token", token)
+        try:
+            resp = client.get("/metrics")
+        finally:
+            client.cookies.clear()
+        assert resp.status_code == 200
+
+    def _admin(self):
+        from datetime import UTC, datetime
+
+        from app.services.auth import User, UserRole
+
+        return User(
+            id="sys-admin-no-session",
+            email="sys-admin@casecite.legal",
+            name="Admin",
+            roles=[UserRole.ADMIN],
+            last_login=datetime.now(UTC),
+        )
+
+    def test_metrics_rejects_admin_token_without_a_session(self, client):
+        """A signed admin token whose session was ended (logout) must not work."""
+        from app.services.auth import auth_service
+
+        token = auth_service.create_access_token(self._admin())
+        resp = client.get("/metrics", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 401
+        # /health still answers, but without the admin-only detail.
+        health = client.get("/health", headers={"Authorization": f"Bearer {token}"})
+        assert health.status_code == 200
+        assert health.json()["components"] is None
+
+    def test_metrics_rejects_a_refresh_token(self, client):
+        from app.services.auth import auth_service
+
+        token = auth_service.create_refresh_token(self._admin())
+        resp = client.get("/metrics", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 401

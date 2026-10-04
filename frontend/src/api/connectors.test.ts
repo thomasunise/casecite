@@ -42,21 +42,21 @@ describe('api/connectors', () => {
     expect(api.request).toHaveBeenCalledWith('/connectors/google/disconnect', { method: 'POST' });
   });
 
-  it('syncConnector calls POST /connectors/:id/sync with options', async () => {
-    (api.request as any).mockResolvedValue({ message: 'syncing' });
-    await (api as any).syncConnector('dropbox', { full: true });
+  it('syncConnector sends an explicit whole-account scope', async () => {
+    (api.request as any).mockResolvedValue({ sync_id: 's1', status: 'started' });
+    await api.syncConnector('dropbox', { sync_all: true });
     expect(api.request).toHaveBeenCalledWith('/connectors/dropbox/sync', {
       method: 'POST',
-      body: JSON.stringify({ full: true }),
+      body: JSON.stringify({ sync_all: true }),
     });
   });
 
-  it('syncConnector defaults options to empty object', async () => {
-    (api.request as any).mockResolvedValue({ message: 'syncing' });
-    await (api as any).syncConnector('dropbox');
-    expect(api.request).toHaveBeenCalledWith('/connectors/dropbox/sync', {
+  it('syncConnector sends a folder scope', async () => {
+    (api.request as any).mockResolvedValue({ sync_id: 's1', status: 'started' });
+    await api.syncConnector('box', { folder_id: 'f-42' });
+    expect(api.request).toHaveBeenCalledWith('/connectors/box/sync', {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({ folder_id: 'f-42' }),
     });
   });
 

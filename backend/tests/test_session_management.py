@@ -30,6 +30,7 @@ def _make_session_manager(tmp_path) -> SessionManager:
     sm._sessions = defaultdict(list)
     sm.max_sessions_per_user = 5
     sm.session_timeout = timedelta(hours=8)
+    sm.idle_timeout = timedelta(minutes=120)
     sm._last_cleanup = datetime.now(UTC)
     sm._cleanup_interval = timedelta(minutes=15)
     sm._session_file = tmp_path / "sessions.jsonl"
@@ -225,3 +226,101 @@ class TestSessionPersistence:
         sm2 = _make_session_manager(tmp_path)
         sm2._load_sessions_from_file()
         assert len(sm2.get_active_sessions("user-1")) == 0
+
+
+class TestIdleTimeout:
+    """A session with no authenticated request for idle_timeout is ended."""
+
+    def test_idle_session_is_invalid(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1")
+        sm._sessions["user-1"][0]["last_activity"] = datetime.now(UTC) - timedelta(minutes=121)
+        assert sm.validate_session("user-1", "jti-1") is False
+        assert sm.get_active_sessions("user-1") == []
+
+    def test_activity_keeps_session_alive(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1")
+        sm._sessions["user-1"][0]["last_activity"] = datetime.now(UTC) - timedelta(minutes=119)
+        assert sm.validate_session("user-1", "jti-1") is True
+        # The request above reset the idle clock.
+        assert sm.validate_session("user-1", "jti-1") is True
+
+    def test_idle_check_can_be_disabled(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.idle_timeout = None
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1")
+        sm._sessions["user-1"][0]["last_activity"] = datetime.now(UTC) - timedelta(hours=7)
+        assert sm.validate_session("user-1", "jti-1") is True
+
+    def test_restart_does_not_count_as_idleness(self, tmp_path):
+        sm1 = _make_session_manager(tmp_path)
+        sm1.create_session("user-1", "10.0.0.1", "Agent", "jti-1")
+        sm1._sessions["user-1"][0]["last_activity"] = datetime.now(UTC) - timedelta(hours=3)
+        sm1._rewrite_session_file()
+
+        sm2 = _make_session_manager(tmp_path)
+        sm2._load_sessions_from_file()
+        assert sm2.validate_session("user-1", "jti-1") is True
+
+
+class TestSessionRotation:
+    """A token refresh moves the SAME session onto the new access token."""
+
+    def test_rotate_replaces_jti_without_adding_a_session(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1", session_id="sid-1")
+        assert sm.rotate_session("user-1", "sid-1", "jti-2") == "jti-1"
+        assert len(sm.get_active_sessions_raw("user-1")) == 1
+        assert sm.validate_session("user-1", "jti-2") is True
+        assert sm.validate_session("user-1", "jti-1") is False
+
+    def test_rotate_never_extends_the_absolute_lifetime(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1", session_id="sid-1")
+        before = dict(sm._sessions["user-1"][0])
+        sm.rotate_session("user-1", "sid-1", "jti-2")
+        after = sm._sessions["user-1"][0]
+        assert after["expires_at"] == before["expires_at"]
+        assert after["created_at"] == before["created_at"]
+
+    def test_rotate_unknown_session_returns_none(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1", session_id="sid-1")
+        assert sm.rotate_session("user-1", "sid-other", "jti-2") is None
+        assert sm.rotate_session("user-1", None, "jti-2") is None
+        assert sm.rotate_session("nobody", "sid-1", "jti-2") is None
+
+    def test_rotate_expired_session_returns_none(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1", session_id="sid-1")
+        sm._sessions["user-1"][0]["expires_at"] = datetime.now(UTC) - timedelta(seconds=1)
+        assert sm.rotate_session("user-1", "sid-1", "jti-2") is None
+        assert sm._sessions["user-1"] == []
+
+    def test_rotate_idle_session_returns_none(self, tmp_path):
+        sm = _make_session_manager(tmp_path)
+        sm.create_session("user-1", "10.0.0.1", "Agent", "jti-1", session_id="sid-1")
+        sm._sessions["user-1"][0]["last_activity"] = datetime.now(UTC) - timedelta(hours=3)
+        assert sm.rotate_session("user-1", "sid-1", "jti-2") is None
+
+    def test_rotation_is_persisted(self, tmp_path):
+        sm1 = _make_session_manager(tmp_path)
+        sm1.create_session("user-1", "10.0.0.1", "Agent", "jti-1", session_id="sid-1")
+        sm1.rotate_session("user-1", "sid-1", "jti-2")
+
+        sm2 = _make_session_manager(tmp_path)
+        sm2._load_sessions_from_file()
+        assert sm2.validate_session("user-1", "jti-2") is True
+        assert sm2.validate_session("user-1", "jti-1") is False
+        assert sm2.rotate_session("user-1", "sid-1", "jti-3") == "jti-2"
+
+    def test_evicted_session_does_not_return_after_restart(self, tmp_path):
+        sm1 = _make_session_manager(tmp_path)
+        for i in range(6):
+            sm1.create_session("user-1", "10.0.0.1", "Agent", f"jti-{i}", session_id=f"sid-{i}")
+
+        sm2 = _make_session_manager(tmp_path)
+        sm2._load_sessions_from_file()
+        assert sm2.rotate_session("user-1", "sid-0", "jti-x") is None
+        assert len(sm2.get_active_sessions_raw("user-1")) == 5

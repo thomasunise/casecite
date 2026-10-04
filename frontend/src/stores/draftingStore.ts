@@ -3,7 +3,7 @@ import { api } from '../api';
 import type {
   ContractDraft, ContractJobResult, DraftPlan, DraftPlanSection,
 } from '../api/types';
-import { useUIStore } from './uiStore';
+import { createJobPoller, toast } from './storeUtils';
 import { persistWorkspaceSession, resetWorkspaceSessionKey } from './workspaceSessionsStore';
 import { registerReset } from './resetRegistry';
 import { downloadBlob } from '../utils/downloadBlob';
@@ -70,11 +70,7 @@ export interface DraftingState {
 
 let messageSeq = 0;
 const nextId = () => `dmsg-${Date.now()}-${++messageSeq}`;
-let pollTimer: ReturnType<typeof setTimeout> | null = null;
-
-function toast(msg: string, type = 'info') {
-  try { useUIStore.getState().addToast(msg, type); } catch { /* noop */ }
-}
+const jobPoller = createJobPoller();
 
 /** Keep section numbers contiguous after an insert or delete. */
 function renumber(sections: DraftPlanSection[]): DraftPlanSection[] {
@@ -114,6 +110,13 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
     toast(msg, 'error');
   };
 
+  /** A sentence naming the case references the server removed as unverifiable. */
+  const removedNote = (removed?: string[]): string => {
+    if (!removed?.length) return '';
+    const n = removed.length;
+    return `\n\n${n} case reference${n === 1 ? '' : 's'} could not be verified against a real source and ${n === 1 ? 'was' : 'were'} removed: ${removed.join('; ')}.`;
+  };
+
   const settle = (result: ContractJobResult) => {
     if ('kind' in result && result.kind === 'draft_plan') {
       const plan = result.plan;
@@ -144,9 +147,9 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
         const revised = Array.isArray(result.revised_sections) ? result.revised_sections : [];
         pushMessage(
           'assistant',
-          revised.length > 0
+          (revised.length > 0
             ? `Draft revised — section${revised.length > 1 ? 's' : ''} ${revised.join(', ')} updated; everything else untouched.`
-            : 'Draft revised — the document is updated.',
+            : 'Draft revised — the document is updated.') + removedNote(result.case_law_removed),
         );
         return;
       }
@@ -160,7 +163,7 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
         : '';
       pushMessage(
         'assistant',
-        `${summary} Keep steering it from the composer, or select any text in the document to rewrite it.${noteText}`,
+        `${summary} Keep steering it from the composer, or select any text in the document to rewrite it.${noteText}${removedNote(result.case_law_removed)}`,
       );
       return;
     }
@@ -168,28 +171,22 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
   };
 
   const pollJob = (jobId: string) => {
-    const poll = async (attempt: number) => {
-      try {
-        const job = await api.getContractJob(jobId);
-        if (job.status === 'completed') {
-          set({ sending: false, progressMessage: '' });
-          if (job.result) settle(job.result);
-          else fail('The job finished but returned no result.');
-          return;
-        }
-        if (job.status === 'failed' || job.status === 'cancelled') {
-          fail(job.error || 'Drafting failed.');
-          return;
-        }
+    jobPoller.start({
+      fetchJob: () => api.getContractJob(jobId),
+      // Long drafts run many calls; allow up to 20 minutes.
+      maxAttempts: 600,
+      failedMessage: 'Drafting failed.',
+      timeoutMessage: 'Timed out waiting for the draft.',
+      onCompleted: (job) => {
+        set({ sending: false, progressMessage: '' });
+        if (job.result) settle(job.result);
+        else fail('The job finished but returned no result.');
+      },
+      onFailed: fail,
+      onPending: (job) => {
         if (job.progress?.message) set({ progressMessage: job.progress.message });
-        // Long drafts run many calls; allow up to 20 minutes.
-        if (attempt > 600) { fail('Timed out waiting for the draft.'); return; }
-        pollTimer = setTimeout(() => poll(attempt + 1), 2000);
-      } catch (e) {
-        fail(e instanceof Error ? e.message : 'Polling failed.');
-      }
-    };
-    poll(0);
+      },
+    });
   };
 
   return {
@@ -253,7 +250,7 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
       if (!draftPlan || !planRequest || sending) return;
       const empty = draftPlan.sections.find((s) => !s.title.trim());
       if (empty) { toast('Every section needs a title.', 'error'); return; }
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       const n = draftPlan.sections.length;
       pushMessage('user', `Generate the draft from the plan (${n} sections).`);
       set({ sending: true, progressMessage: `Drafting ${n} sections in parallel…` });
@@ -298,7 +295,7 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
       const trimmed = text.trim();
       const { sending, draftWorkspace, draftReferences, targetPages } = get();
       if (!trimmed || sending) return;
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       pushMessage('user', trimmed);
       const referenceIds = mode === 'draft' ? draftReferences.map((r) => r.id) : [];
 
@@ -337,7 +334,7 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
           pollJob(resp.job_id);
         } else if (resp.type === 'answer') {
           set({ sending: false, progressMessage: '' });
-          pushMessage('assistant', resp.answer || '');
+          pushMessage('assistant', (resp.answer || '') + removedNote(resp.case_law_removed));
         } else if (resp.type === 'clarify') {
           set({ sending: false, progressMessage: '' });
           pushMessage('assistant', resp.question || 'Tell me more about what you need.');
@@ -389,13 +386,13 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
     },
 
     clearConversation: () => {
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       set({ messages: [], sending: false, progressMessage: '', draftPlan: null, planRequest: null });
       resetWorkspaceSessionKey('drafting');
     },
 
     restoreWorkspaceSession: async (payload) => {
-      if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+      jobPoller.stop();
       const p = payload as {
         messages?: DraftingMessage[];
         draftWorkspace?: { title: string; text: string; dirty: boolean } | null;
@@ -419,6 +416,6 @@ export const useDraftingStore = create<DraftingState>((set, get) => {
 });
 
 registerReset(() => {
-  if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  jobPoller.stop();
   useDraftingStore.setState(useDraftingStore.getInitialState(), true);
 });

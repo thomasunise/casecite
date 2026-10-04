@@ -24,7 +24,7 @@ ChromaDB index needs a persistent local disk (see `docs/adr/004-deployment-topol
 
 2. Add the required GitHub secrets. Go to your repo → **Settings** → **Secrets and variables** → **Actions**.
 
-3. Push to `master`/`main`. The CI pipeline runs first; on success, your CD workflow triggers.
+3. Push to `main`. The CI pipeline runs first; on success, your CD workflow triggers. The templates deploy only for a push to this repository's `main` — a CI run for a pull request never deploys.
 
 ## Required Secrets per Template
 
@@ -43,6 +43,7 @@ Create a GitHub Environment named `production`, then add:
 | `DEPLOY_HOST` | VPS IP address or hostname |
 | `DEPLOY_USER` | SSH username (e.g. `root` or `deploy`) |
 | `DEPLOY_SSH_KEY` | Private SSH key (ed25519 or RSA) |
+| `DEPLOY_HOST_FINGERPRINT` | The server's SSH host-key fingerprint (`ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub \| cut -d ' ' -f2`), so the key is never offered to an impostor host |
 | `GHCR_PULL_TOKEN` | GitHub PAT with only `read:packages`, for `docker login` on the VPS (omit if the package is public) |
 
 The image name comes from `CASECITE_IMAGE` in the server's `.env`
@@ -62,4 +63,4 @@ Create a GitHub Environment named `production`, then add:
 | `AZURE_RESOURCE_GROUP` | Resource group name |
 | `AZURE_APP_NAME` | Container App name |
 
-Uses Workload Identity Federation (OIDC) — no client secrets needed. See [Azure OIDC setup](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure).
+Deploys the image tagged with the commit SHA CI just built, not `:latest`. Uses Workload Identity Federation (OIDC) — no client secrets needed. See [Azure OIDC setup](https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure).

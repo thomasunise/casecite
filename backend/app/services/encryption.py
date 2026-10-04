@@ -27,9 +27,8 @@ class EncryptionService:
     """
     AES-256-GCM encryption for data at rest.
 
-    In production, use:
-    - Azure Key Vault for key management
-    - Hardware Security Module (HSM) for key storage
+    The master key is derived from SECRET_KEY + ENCRYPTION_SALT (both supplied
+    by the operator's environment); there is no external KMS/HSM integration.
     """
 
     def __init__(self):
@@ -161,15 +160,21 @@ class EncryptionService:
         return base64.b64encode(encrypted).decode("ascii")
 
     def decrypt_string(self, ciphertext: str) -> str:
-        """Decrypt a base64-encoded ciphertext string."""
+        """Decrypt a base64-encoded ciphertext string.
+
+        Raises ValueError for anything unreadable — bad base64, a truncated
+        blob, or an authentication failure (wrong key/salt or tampered data).
+        InvalidTag is not a ValueError, so it is translated here; callers only
+        ever need to handle ValueError.
+        """
         try:
             encrypted = base64.b64decode(ciphertext.encode("ascii"))
             decrypted = self.decrypt(encrypted)
             return decrypted.decode("utf-8")
-        except (ValueError, TypeError, UnicodeDecodeError, OverflowError):
+        except (InvalidTag, ValueError, TypeError, AttributeError, OverflowError) as e:
             raise ValueError(
                 "Failed to decrypt data. The key may have changed or data is corrupted."
-            )
+            ) from e
 
     def hash_password(self, password: str) -> str:
         """Hash a password for storage.
@@ -190,79 +195,6 @@ class EncryptionService:
 
         return passwords.verify_password(password, hashed)
 
-    def generate_api_key(self) -> tuple[str, str]:
-        """
-        Generate an API key pair.
-        Returns: (key_id, secret_key)
-        """
-        key_id = f"pa_{secrets.token_urlsafe(8)}"
-        secret_key = secrets.token_urlsafe(32)
-        return key_id, secret_key
-
-    def encrypt_file(self, file_path: str, output_path: str = None) -> str:
-        """Encrypt a file at rest."""
-        output_path = output_path or file_path + ".enc"
-
-        with open(file_path, "rb") as f:
-            plaintext = f.read()
-
-        encrypted = self.encrypt(plaintext)
-
-        with open(output_path, "wb") as f:
-            f.write(encrypted)
-
-        return output_path
-
-    def decrypt_file(self, file_path: str, output_path: str = None) -> str:
-        """Decrypt an encrypted file."""
-        if output_path is None:
-            output_path = file_path.rsplit(".enc", 1)[0]
-
-        with open(file_path, "rb") as f:
-            ciphertext = f.read()
-
-        decrypted = self.decrypt(ciphertext)
-
-        with open(output_path, "wb") as f:
-            f.write(decrypted)
-
-        return output_path
-
-
-class FieldEncryption:
-    """
-    Field-level encryption for sensitive database fields.
-
-    Use for:
-    - SSN, Tax ID
-    - Financial data
-    - Personal health information
-    """
-
-    def __init__(self, encryption_service: EncryptionService):
-        self.crypto = encryption_service
-
-    def encrypt_field(self, value: str) -> str:
-        """Encrypt a field value."""
-        if not value:
-            return value
-        return self.crypto.encrypt_string(value)
-
-    def decrypt_field(self, value: str) -> str:
-        """Decrypt a field value."""
-        if not value:
-            return value
-        return self.crypto.decrypt_string(value)
-
-    def mask_field(self, value: str, visible_chars: int = 4) -> str:
-        """Mask a field value for display (e.g., SSN: ***-**-1234)."""
-        if not value or len(value) <= visible_chars:
-            return "*" * len(value) if value else ""
-
-        masked_len = len(value) - visible_chars
-        return "*" * masked_len + value[-visible_chars:]
-
 
 # Global encryption service
 encryption_service = EncryptionService()
-field_encryption = FieldEncryption(encryption_service)

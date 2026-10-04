@@ -81,6 +81,11 @@ elif DATABASE_URL.startswith("postgresql://") and "asyncpg" not in DATABASE_URL:
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
+# Outside DEBUG, keep bound parameters out of SQLAlchemy error messages and
+# logs: they carry chat/document text, password hashes and encrypted secrets.
+_HIDE_PARAMETERS = os.environ.get("DEBUG", "").lower() not in ("true", "1")
+
+
 def get_async_engine():
     """Create async SQLAlchemy engine with appropriate settings."""
     if IS_SQLITE:
@@ -96,6 +101,7 @@ def get_async_engine():
         engine = create_async_engine(
             DATABASE_URL,
             echo=os.environ.get("SQL_DEBUG", "").lower() == "true",
+            hide_parameters=_HIDE_PARAMETERS,
             # timeout: seconds a writer waits on a locked database before
             # raising, instead of failing on the first concurrent write.
             connect_args={"check_same_thread": False, "timeout": 30},
@@ -147,6 +153,7 @@ def get_async_engine():
         engine = create_async_engine(
             DATABASE_URL,
             echo=os.environ.get("SQL_DEBUG", "").lower() == "true",
+            hide_parameters=_HIDE_PARAMETERS,
             pool_size=20,
             max_overflow=30,
             pool_pre_ping=True,  # Verify connections before use
@@ -169,12 +176,14 @@ def get_sync_engine():
         engine = create_engine(
             sync_url,
             echo=os.environ.get("SQL_DEBUG", "").lower() == "true",
+            hide_parameters=_HIDE_PARAMETERS,
             connect_args={"check_same_thread": False},
         )
     else:
         engine = create_engine(
             sync_url,
             echo=os.environ.get("SQL_DEBUG", "").lower() == "true",
+            hide_parameters=_HIDE_PARAMETERS,
             pool_size=5,
             max_overflow=10,
             pool_pre_ping=True,

@@ -4,6 +4,7 @@ import s from './JudgeIntelView.module.css';
 // Shared tool-page shell: scrolling results + the app-wide floating composer.
 import t from './ToolsView.module.css';
 import { Icon, JudgeSearchPanel, JudgeBriefTab, JudgeProfileTab, JudgeOpinionsTab, JudgeStatsSection, JudgeMetricsSection, DocumentSelector } from '../components';
+import { safeHttpUrl } from '../components/shared/safeUrl';
 
 function JudgeIntelView() {
   const {
@@ -105,7 +106,7 @@ function JudgeIntelView() {
                   <h2 className={s.judgeProfileName}>
                     {judgeIntelProfile.name}
                     {judgeIntelProfile.wikipedia_url && (
-                      <a href={judgeIntelProfile.wikipedia_url} target="_blank" rel="noopener noreferrer"
+                      <a href={safeHttpUrl(judgeIntelProfile.wikipedia_url) ?? undefined} target="_blank" rel="noopener noreferrer"
                          className={s.wikiLink}>
                         <Icon name="ExternalLink" size={11} className={s.wikiLinkIcon} />Wikipedia
                       </a>
@@ -117,7 +118,7 @@ function JudgeIntelView() {
                     {judgeIntelProfile.place_of_birth_city && <span>{judgeIntelProfile.place_of_birth_city}, {judgeIntelProfile.place_of_birth_state}</span>}
                     {judgeIntelProfile.political_affiliation && <span>{judgeIntelProfile.political_affiliation}</span>}
                     {judgeIntelProfile.courtlistener_url ? (
-                      <a href={String(judgeIntelProfile.courtlistener_url)} target="_blank" rel="noopener noreferrer" className={s.wikiLink}>
+                      <a href={safeHttpUrl(judgeIntelProfile.courtlistener_url) ?? undefined} target="_blank" rel="noopener noreferrer" className={s.wikiLink}>
                         <Icon name="ExternalLink" size={11} className={s.wikiLinkIcon} />CourtListener
                       </a>
                     ) : null}

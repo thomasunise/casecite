@@ -1,6 +1,10 @@
-# Code ownership for review routing (SOC 2 CC8.1 change management).
-# Every PR requires review from the owners below. Configure branch protection
-# on `master` to require CODEOWNERS review + passing CI before merge.
+# Code ownership for review routing (change management).
+# GitHub requests review from the owners below on every PR. That only becomes a
+# REQUIREMENT once branch protection on `main` is configured to require
+# CODEOWNERS review + passing CI before merge (repository setting, not in this
+# file — see CONTRIBUTING.md). With a single owner, the owner's own PRs cannot
+# be code-owner-reviewed; add a second maintainer before relying on this as a
+# two-person control.
 
 # Default owner for everything.
 *                           @thomasunise

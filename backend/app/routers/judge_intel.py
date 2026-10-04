@@ -36,7 +36,7 @@ router = APIRouter(prefix="/judge-intel", tags=["judge-intelligence"])
 @router.get("/search", response_model=JudgeSearchResponse)
 async def search_judges(
     q: str = Query(..., description="Judge name to search"),
-    limit: int = Query(500, le=1000),
+    limit: int = Query(500, ge=1, le=1000),
     current_user: TokenData = require_permission("judge_intel.use"),
 ) -> JudgeSearchResponse:
     """Search for judges by name. Returns up to 1000 matching judges. Requires authentication."""
@@ -141,7 +141,7 @@ async def get_judge_profile(
         raise
     except RESEARCH_ERRORS as e:
         raise courtlistener_http_error(
-            e, "Profile error for judge {judge_id}", "Operation failed. Please try again."
+            e, f"Profile error for judge {judge_id}", "Operation failed. Please try again."
         )
 
 
@@ -153,8 +153,8 @@ async def query_opinions(
     year_start: int | None = Query(None, description="Start year"),
     year_end: int | None = Query(None, description="End year"),
     min_citations: int | None = Query(None, description="Minimum citations"),
-    limit: int = Query(50, le=200),
-    offset: int = Query(0),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=100_000),
     order: str = Query("date", pattern="^(date|citations)$"),
     current_user: TokenData = require_permission("judge_intel.use"),
 ) -> JudgeOpinionsResponse:
@@ -174,7 +174,7 @@ async def query_opinions(
         return results
     except RESEARCH_ERRORS as e:
         raise courtlistener_http_error(
-            e, "Query opinions error for judge {judge_id}", "Operation failed. Please try again."
+            e, f"Query opinions error for judge {judge_id}", "Operation failed. Please try again."
         )
 
 
@@ -206,7 +206,7 @@ async def get_statistics(
         return stats
     except RESEARCH_ERRORS as e:
         raise courtlistener_http_error(
-            e, "Stats error for judge {judge_id}", "Operation failed. Please try again."
+            e, f"Stats error for judge {judge_id}", "Operation failed. Please try again."
         )
 
 
@@ -252,7 +252,7 @@ async def get_advanced_metrics(
         raise
     except RESEARCH_ERRORS as e:
         raise courtlistener_http_error(
-            e, "Metrics error for judge {judge_id}", "Operation failed. Please try again."
+            e, f"Metrics error for judge {judge_id}", "Operation failed. Please try again."
         )
 
 
@@ -271,5 +271,5 @@ async def delete_judge_data(
         }
     except RESEARCH_ERRORS as e:
         raise courtlistener_http_error(
-            e, "Delete error for judge {judge_id}", "Operation failed. Please try again."
+            e, f"Delete error for judge {judge_id}", "Operation failed. Please try again."
         )

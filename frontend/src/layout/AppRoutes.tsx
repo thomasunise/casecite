@@ -14,6 +14,11 @@ const ToolsView = React.lazy(() => import('../views/ToolsView'));
 const AuthorityMapView = React.lazy(() => import('../views/AuthorityMapView'));
 const ContractsView = React.lazy(() => import('../views/ContractsView'));
 const DraftingView = React.lazy(() => import('../views/DraftingView'));
+const ResetPasswordView = React.lazy(() => import('../views/ResetPasswordView'));
+const NotFoundView = React.lazy(() => import('../views/NotFoundView'));
+
+/** The emailed reset link must work signed out — it is how you get back in. */
+const RESET_PASSWORD_PATH = '/reset-password';
 
 function ViewLoadingFallback() {
   return (
@@ -29,6 +34,14 @@ function ViewLoadingFallback() {
 export function AppRoutes() {
   const isAuthenticated = useAuthStore(s => s.isAuthenticated);
   const { pathname } = useLocation();
+
+  if (pathname === RESET_PASSWORD_PATH) {
+    return (
+      <Suspense fallback={<ViewLoadingFallback />}>
+        <ResetPasswordView />
+      </Suspense>
+    );
+  }
 
   if (!isAuthenticated) {
     return <AuthOverlay />;
@@ -56,7 +69,7 @@ export function AppRoutes() {
         <Route path="/contracts" element={<ContractsView />} />
         <Route path="/drafting" element={<DraftingView />} />
         <Route path="/" element={<Navigate to="/research" replace />} />
-        <Route path="*" element={<Navigate to="/research" replace />} />
+        <Route path="*" element={<NotFoundView />} />
       </Routes>
     </Suspense>
     </ErrorBoundary>

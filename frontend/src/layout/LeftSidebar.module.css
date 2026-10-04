@@ -218,89 +218,6 @@
 }
 
 /* Integrations */
-.integrationsSection {
-  margin-bottom: 16px;
-  margin-top: 16px;
-}
-
-.integrationsSectionCollapsed {
-  margin-top: 12px;
-}
-
-.integrationsList {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.integrationBtn {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  transition: background 0.15s;
-  position: relative;
-}
-
-.integrationBtnCollapsed {
-  padding: 8px;
-  justify-content: center;
-}
-
-.integrationBtnLocked {
-  opacity: 0.6;
-}
-
-.integrationIcon {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.integrationName {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--chrome-text-secondary);
-}
-
-.integrationDocs {
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--gold-400);
-  background: var(--chrome-fill);
-  padding: 2px 6px;
-  border-radius: 4px;
-}
-
-.seeProvidersBtn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  padding: 6px 10px;
-  margin-top: 4px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  font-size: 11px;
-  color: var(--chrome-text-faint);
-  transition: color 0.2s;
-}
-
-.seeProvidersBtn:hover {
-  color: var(--chrome-text-muted);
-}
 
 /* Icon color utility classes (extracted from inline styles) */
 .iconGray400 {
@@ -311,6 +228,3 @@
   color: var(--gold-500);
 }
 
-.iconWhite30 {
-  color: var(--chrome-text-faint);
-}

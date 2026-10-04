@@ -34,10 +34,27 @@ def get_connector(connector_type: ConnectorType):
     return connector
 
 
-async def get_all_connector_statuses():
-    """Get status of all connectors."""
+async def get_all_connector_statuses(include_admin_only: bool = True):
+    """Get status of all connectors.
+
+    With ``include_admin_only=False`` a connector backed by a firm-wide
+    credential (``requires_admin``) is reported as not connected without
+    touching the provider, so a non-admin never opens a session with it.
+    """
     statuses = []
     for connector_type, connector in CONNECTORS.items():
+        if connector.requires_admin and not include_admin_only:
+            statuses.append(
+                {
+                    "connected": False,
+                    "configured": connector.is_configured,
+                    "type": connector_type.value,
+                    "admin_only": True,
+                }
+            )
+            continue
         status = await connector.get_status()
+        if connector.requires_admin:
+            status["admin_only"] = True
         statuses.append(status)
     return statuses

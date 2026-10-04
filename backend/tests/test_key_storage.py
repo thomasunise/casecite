@@ -6,12 +6,6 @@ rest, source of truth on disk, with Redis used only as an optional read-through
 cache. These tests isolate the on-disk store to a temp file per test.
 """
 
-import os
-
-os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only-32chars!"
-os.environ["ENCRYPTION_SALT"] = "test-salt-16chars!"
-os.environ["DEBUG"] = "true"
-
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -106,8 +100,23 @@ class TestDeleteUserKeys:
         assert get_user_keys("user-2") == {}
 
     def test_delete_nonexistent_user_no_error(self, mock_no_redis):
-        # Should not raise even if user doesn't exist
+        save_user_keys("user-1", {"openai": "sk-keep-this-key-12"})
+
+        # Should not raise even if user doesn't exist, and must leave others alone.
         delete_user_keys("nonexistent-user")
+        assert get_user_keys("nonexistent-user") == {}
+        assert get_user_keys("user-1")["openai"] == "sk-keep-this-key-12"
+
+    def test_delete_failure_is_not_swallowed(self, mock_no_redis):
+        """If the store cannot be rewritten the key is still on disk — say so."""
+        save_user_keys("user-1", {"openai": "sk-keep-this-key-12"})
+
+        with (
+            patch("app.services.key_storage._write_store", side_effect=OSError("read-only fs")),
+            pytest.raises(RuntimeError, match="Key storage unavailable"),
+        ):
+            delete_user_keys("user-1")
+        assert get_user_keys("user-1")["openai"] == "sk-keep-this-key-12"
 
 
 class TestGetUserApiKey:

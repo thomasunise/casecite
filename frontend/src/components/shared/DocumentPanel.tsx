@@ -10,7 +10,7 @@ interface DocumentPanelProps {
   documents: UploadedDocument[];
   onUpload: (doc: UploadedDocument) => void;
   onRemove: (id: string) => void;
-  inputRef?: React.RefObject<HTMLInputElement | null>;
+  inputRef?: React.RefObject<HTMLInputElement>;
   onUpdateDoc?: (id: string, updates: Partial<UploadedDocument>) => void;
   isAuthenticated: boolean;
   onAuthRequired?: () => void;

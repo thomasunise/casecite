@@ -22,7 +22,6 @@ function defaultProps(overrides: Record<string, any> = {}) {
     llmModel: 'gpt-5.5',
     temperature: 0.1,
     maxTokens: 4096,
-    batchSize: 100,
   };
   return {
     local,
@@ -48,9 +47,9 @@ describe('EmbeddingTab', () => {
     expect(container.textContent).toContain('Embedding Dimensions');
   });
 
-  it('shows batch size input', () => {
+  it('does not offer a batch size the server has no setting for', () => {
     const { container } = render(<EmbeddingTab {...defaultProps()} />);
-    expect(container.textContent).toContain('Batch Size');
+    expect(container.textContent).not.toContain('Batch Size');
   });
 
   it('has a select element for embedding model', () => {

@@ -1,11 +1,22 @@
 """LLM generation and context building for RAG pipeline."""
 
+import asyncio
 import logging
-from typing import Any
+import re
+from typing import TYPE_CHECKING, Any, Optional
 
+from app.config import settings
 from app.models.schemas import QueryIntent
-from app.services.llm_clients import openai_chat
+from app.services.llm_clients import SDK_MAX_RETRIES, openai_chat
+from app.services.provider_policy import (
+    enforce_openai_client,
+    enforce_provider_allowed,
+    openai_client_provider,
+)
 from app.services.rag.prompt_safety import untrusted_block
+
+if TYPE_CHECKING:
+    from app.services.user_keys import UserAPIKeys
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +85,20 @@ def get_model_max_tokens(model_name: str, intent: QueryIntent | None = None) -> 
         return 4096
 
 
+def provider_of_model(model: str | None) -> str:
+    """Which provider family a model NAME belongs to ("anthropic"/"google"/"openai").
+
+    Used only to pick a client; the allowlist check always keys on the client
+    that actually carries the request, never on this.
+    """
+    lowered = (model or "").lower()
+    if "claude" in lowered:
+        return "anthropic"
+    if "gemini" in lowered:
+        return "google"
+    return "openai"
+
+
 async def call_llm(
     openai_client,
     anthropic_client,
@@ -84,12 +109,23 @@ async def call_llm(
     max_tokens: int,
     temperature: float = 0.1,
 ) -> str:
-    """Call the appropriate LLM provider and return response content.
+    """Call the provider that serves ``model`` and return the response text.
 
-    Tries Claude first if model contains 'claude', then Gemini, then OpenAI.
-    Raises ValueError if no LLM is configured.
+    The model name picks the provider and the request never silently moves to
+    a different one: a Claude model needs an Anthropic client, a Gemini model
+    a Google key. The only exception is a custom OpenAI-compatible endpoint
+    (OPENAI_BASE_URL — e.g. a gateway or local server that itself serves a
+    model named "claude-…"), which is used as configured.
+
+    Every branch is checked against the AI provider allowlist using the client
+    that will carry the request. Raises ValueError (with a message fit to show
+    the user) when no suitable client is configured or the provider is not
+    allowed.
     """
-    if "claude" in model.lower() and anthropic_client:
+    family = provider_of_model(model)
+
+    if family == "anthropic" and anthropic_client:
+        enforce_provider_allowed("anthropic", "AI request")
         response = await anthropic_client.messages.create(
             model=model,
             max_tokens=max_tokens,
@@ -97,13 +133,27 @@ async def call_llm(
             messages=[{"role": "user", "content": user_prompt}],
         )
         return response.content[0].text
-    elif "gemini" in model.lower() and gemini_model:
-        import asyncio
-
+    if family == "google" and gemini_model:
+        enforce_provider_allowed("google", "AI request")
         full_prompt = f"{system_prompt}\n\n{user_prompt}"
         response = await asyncio.to_thread(gemini_model.generate_content, full_prompt)
         return response.text
-    elif openai_client:
+
+    if family != "openai":
+        # No native client for the selected model. Sending a "claude-…" /
+        # "gemini-…" request to api.openai.com would only fail there — and
+        # would route the user's text to a provider they did not choose.
+        on_gateway = openai_client is not None and openai_client_provider(openai_client) != "openai"
+        if not on_gateway:
+            needed = "an Anthropic" if family == "anthropic" else "a Google (Gemini)"
+            raise ValueError(
+                f"The selected model '{model}' needs {needed} API key, and none is "
+                "configured. Add the key in Settings, or choose a model from a "
+                "provider you have a key for."
+            )
+
+    if openai_client:
+        enforce_openai_client(openai_client, "AI request")
         response = await openai_chat(
             openai_client,
             model=model,
@@ -115,8 +165,76 @@ async def call_llm(
             max_tokens=max_tokens,
         )
         return response.choices[0].message.content
-    else:
-        raise ValueError(
-            "No LLM configured. Please provide an API key in Settings, "
-            "or set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable."
+    raise ValueError(
+        "No LLM configured. Please provide an API key in Settings, "
+        "or set OPENAI_API_KEY or ANTHROPIC_API_KEY environment variable."
+    )
+
+
+_server_anthropic_client = None
+
+
+def _server_anthropic():
+    """The instance-level Anthropic client (ANTHROPIC_API_KEY), or None."""
+    global _server_anthropic_client
+    if _server_anthropic_client is None and settings.anthropic_api_key:
+        from anthropic import AsyncAnthropic
+
+        _server_anthropic_client = AsyncAnthropic(
+            api_key=settings.anthropic_api_key,
+            timeout=settings.api_timeout,
+            max_retries=SDK_MAX_RETRIES,
         )
+    return _server_anthropic_client
+
+
+async def chosen_provider_text(
+    prompt: str,
+    *,
+    user_keys: Optional["UserAPIKeys"] = None,
+    model: str | None = None,
+    max_tokens: int = 4096,
+) -> str | None:
+    """Run a utility prompt on the provider of the user's chosen chat model.
+
+    The helper passes around the answer (routing, case-law screening, claim
+    grounding, citation reasoning, per-file analysis) carry the user's question
+    and document text. When the user selected a Claude or Gemini model, those
+    passes must not quietly go to OpenAI instead — so they run on the chosen
+    provider here.
+
+    Returns the response text, or None when the chosen model is served by the
+    OpenAI-compatible client (the caller then uses its normal OpenAI path) or
+    when no client for the chosen provider is configured.
+    """
+    family = provider_of_model(model)
+    if family == "anthropic":
+        client = user_keys.get_async_anthropic_client() if user_keys else None
+        client = client or _server_anthropic()
+        if client is None:
+            return None
+        enforce_provider_allowed("anthropic", "AI request")
+        response = await client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+    if family == "google":
+        gemini = user_keys.get_google_model(model) if user_keys else None
+        if gemini is None:
+            return None
+        enforce_provider_allowed("google", "AI request")
+        response = await asyncio.to_thread(gemini.generate_content, prompt)
+        return response.text
+    return None
+
+
+_JSON_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL | re.IGNORECASE)
+
+
+def strip_json_fences(text: str | None) -> str:
+    """Unwrap a ```json … ``` fence some models put around a JSON answer."""
+    raw = text or ""
+    match = _JSON_FENCE_RE.match(raw)
+    return match.group(1) if match else raw

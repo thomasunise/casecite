@@ -11,6 +11,7 @@ function SignupModal() {
     signupName, setSignupName, signupEmail, setSignupEmail,
     signupPassword, setSignupPassword, signupConfirmPassword, setSignupConfirmPassword,
     signupCompany, setSignupCompany,
+    signupBootstrapToken, setSignupBootstrapToken, signupNeedsBootstrapToken,
     signupError, signupLoading,
     handleSignupSubmit, handleShowLogin,
   } = useAuthStore();
@@ -37,7 +38,7 @@ function SignupModal() {
               {signupError}
             </div>
           )}
-          <form onSubmit={e => { e.preventDefault(); handleSignupSubmit(); }} className={s.formLayout}>
+          <form id={`${id}-form`} onSubmit={e => { e.preventDefault(); handleSignupSubmit(); }} className={s.formLayout}>
             <div>
               <label htmlFor={`${id}-name`} className={s.formLabel}>Full Name *</label>
               <input id={`${id}-name`} type="text" className={s.modalInput} value={signupName} onChange={e => setSignupName(e.target.value)}
@@ -63,17 +64,30 @@ function SignupModal() {
               <input id={`${id}-confirm`} type="password" className={s.modalInput} value={signupConfirmPassword} onChange={e => setSignupConfirmPassword(e.target.value)}
                 placeholder="Confirm your password" autoComplete="new-password" />
             </div>
+            {/* Only the very first account on a new instance needs this. It
+                opens by itself when the server asks for the token. */}
+            <details className={s.setupDisclosure} open={signupNeedsBootstrapToken || undefined}>
+              <summary>Initial setup — creating the first administrator</summary>
+              <label htmlFor={`${id}-setup-token`} className={s.formLabel}>Setup token</label>
+              <input id={`${id}-setup-token`} type="password" className={s.modalInput} value={signupBootstrapToken}
+                onChange={e => setSignupBootstrapToken(e.target.value)} autoComplete="off"
+                aria-describedby={`${id}-setup-hint`} />
+              <p id={`${id}-setup-hint`} className={s.policyHint}>
+                The value of REGISTRATION_BOOTSTRAP_TOKEN from this server&apos;s configuration. The first
+                account becomes the administrator. Leave it empty for every later registration.
+              </p>
+            </details>
           </form>
         </div>
         <div className={s.modalFooter}>
           <button type="button" className={s.btnSecondary} onClick={() => setShowSignupModal(false)}>Cancel</button>
-          <button type="button" className={s.btnPrimary} onClick={handleSignupSubmit} disabled={signupLoading}>
+          <button type="submit" form={`${id}-form`} className={s.btnPrimary} disabled={signupLoading}>
             {signupLoading ? 'Creating account...' : 'Register'}
           </button>
         </div>
         <div className={s.bottomBar}>
           Already have an account?{' '}
-          <button onClick={handleShowLogin} className={s.switchLink}>
+          <button type="button" onClick={handleShowLogin} className={s.switchLink}>
             Sign in
           </button>
         </div>

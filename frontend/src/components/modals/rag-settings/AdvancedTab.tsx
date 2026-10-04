@@ -14,8 +14,8 @@ export const AdvancedTab = ({ local, setLocal, s }: AdvancedTabProps) => {
   return (
   <div className={s.toggleList}>
     {[
-      { key: 'enableReranking', label: 'Enable Reranking', desc: 'Use cross-encoder to rerank retrieved results' },
-      { key: 'hybridSearch', label: 'Hybrid Search', desc: 'Combine semantic and keyword search (BM25)' },
+      { key: 'enableReranking', label: 'Cross-Encoder Reranking', desc: 'Rerank retrieved passages with a cross-encoder model. Takes effect only when the server has the optional sentence-transformers package installed; otherwise it is ignored and results keep their similarity order.' },
+      { key: 'hybridSearch', label: 'Keyword Rescoring (BM25)', desc: 'Blend keyword-match scores into the ranking of the passages that semantic search retrieved' },
       { key: 'citationVerification', label: 'Citation Verification', desc: 'Cross-reference citations against source documents' },
       { key: 'contextCompression', label: 'Context Compression', desc: 'Compress retrieved context to fit more documents' },
       { key: 'queryExpansion', label: 'Query Expansion', desc: 'Automatically expand queries with related terms' },
@@ -27,6 +27,10 @@ export const AdvancedTab = ({ local, setLocal, s }: AdvancedTabProps) => {
           <div className={s.toggleDesc}>{item.desc}</div>
         </div>
         <button
+          type="button"
+          role="switch"
+          aria-checked={!!local[item.key]}
+          aria-label={item.label}
           className={`${s.toggleSwitch} ${local[item.key] ? s.toggleSwitchOn : s.toggleSwitchOff}`}
           onClick={() => setLocal({...local, [item.key]: !local[item.key]})}
         >
@@ -38,8 +42,8 @@ export const AdvancedTab = ({ local, setLocal, s }: AdvancedTabProps) => {
       <div>
         <div className={s.toggleLabel}>Rebuild Search Index</div>
         <div className={s.toggleDesc}>
-          Re-embed every document from its stored file. Use this when documents show as
-          indexed but chat can't find them (admin only).
+          Re-embed every one of your documents from its stored file. Use this when documents
+          show as indexed but chat can't find them.
         </div>
       </div>
       <button className={s.reindexBtn} onClick={handleReindex} disabled={isReindexing}>

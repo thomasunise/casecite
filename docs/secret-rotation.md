@@ -22,7 +22,7 @@ Two facts shape every procedure below:
 | `ENCRYPTION_SALT` | `.env` | BYOK keys, connector tokens, TOTP secrets, instance secrets — safe with `ENCRYPTION_SALT_PREVIOUS` + re-encrypt |
 | `AUDIT_HMAC_KEY` | `.env` | Old audit entries only verify while the old key is in `AUDIT_HMAC_KEY_PREVIOUS` |
 | `POSTGRES_PASSWORD` | `.env` | Change in Postgres first, then recreate the backend |
-| `REDIS_PASSWORD` | `.env` | Recreating Redis + backend applies it; sessions/rate-limit state in Redis is lost |
+| `REDIS_PASSWORD` | `.env` | Recreating Redis + backend applies it; Redis state written since its last snapshot (recent revocations, counters, in-flight jobs) can be lost |
 | `OPENAI_API_KEY` etc. | `.env` (and per-user BYOK in Settings) | Rotate at the provider first |
 | `SENDGRID_API_KEY` | `.env` | Rotate at the provider first |
 | `BACKUP_ENCRYPTION_KEY` | wherever backups run | Old backups need the old key — keep both until they age out |
@@ -39,8 +39,15 @@ rotation itself.
 > `SECRET_KEY` (HKDF, `app/utils/file_crypto.py`). There is no previous-key
 > mechanism for `SECRET_KEY`: rotating it makes every stored document
 > unreadable. Rotate it only after a confirmed compromise, and only with a
-> fresh backup and a plan to re-upload the corpus. For routine hygiene, rotate
-> `ENCRYPTION_SALT` and `AUDIT_HMAC_KEY` instead — those support rotation.
+> fresh backup and a plan to re-upload the corpus. In-place `SECRET_KEY`
+> rotation is on the roadmap, not implemented.
+>
+> Be clear about what the supported rotations do and do not give you.
+> `ENCRYPTION_SALT` is a key-derivation input, not the secret: the secret behind
+> every at-rest key is `SECRET_KEY`. Rotating the salt re-derives the keys for
+> stored API keys, connector tokens and TOTP secrets, which is useful hygiene,
+> but it does **not** help after `SECRET_KEY` itself has leaked — an attacker
+> who holds `SECRET_KEY` and the `.env` can derive the new keys too.
 
 ```bash
 NEW_KEY=$(openssl rand -hex 32)
@@ -59,7 +66,7 @@ re-encryption pass then rewrites everything so the old salt can be retired.
 
 ```bash
 # 1. Generate the new salt and the exact .env lines to paste
-python scripts/rotate_encryption_key.py
+python3 scripts/rotate_encryption_key.py
 #    -> ENCRYPTION_SALT=<new>
 #    -> ENCRYPTION_SALT_PREVIOUS=<old>[,older,...]
 
@@ -139,9 +146,14 @@ provider, update `DATABASE_URL` in `.env`, then `docker compose up -d backend`.
 Redis gets its password as a command-line argument (`--requirepass`), so it is
 applied by recreating the container, not by `CONFIG SET` (which an
 unauthenticated `redis-cli` cannot run anyway and which would not survive a
-restart). Redis holds sessions, revocations, rate-limit counters, OAuth state
-and job results; recreating it signs everyone out and clears in-flight jobs —
-do it in a maintenance window.
+restart). Redis holds token revocations, account-lockout and rate-limit
+counters, consumed MFA challenges, OAuth state and job results. (Sessions
+themselves are held by the backend process and mirrored to `sessions.jsonl` on
+the data volume.) Recreating the container keeps the `redis_data` volume, so
+Redis reloads its last snapshot; anything written since that snapshot — recent
+revocations, counters, in-flight job results — can be lost. Do it in a
+maintenance window, and after an incident have affected users change their
+passwords, which invalidates their older tokens regardless of Redis.
 
 ```bash
 NEW_PW=$(openssl rand -hex 32)
@@ -176,7 +188,7 @@ with the old key has passed `BACKUP_RETENTION_DAYS`.
 ## Verify after any rotation
 
 ```bash
-python scripts/setup_production.py --validate     # required secrets present and well-formed
+python3 scripts/setup_production.py --validate    # required secrets present and well-formed
 curl -sf https://app.yourfirm.com/ready           # DB + Redis reachable
 docker compose -f docker-compose.prod.yml logs --tail=50 backend
 ```

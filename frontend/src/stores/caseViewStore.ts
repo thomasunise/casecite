@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { api, API_BASE_URL } from '../api';
+import { formatErrorDetail } from '../api/client';
 import { persistWorkspaceSession, resetWorkspaceSessionKey } from './workspaceSessionsStore';
 import { registerReset } from './resetRegistry';
 import { appNavigate, appNavigateBack } from '../utils/router';
@@ -88,10 +89,8 @@ export const useCaseViewStore = create<CaseViewState>((set, get) => ({
     try {
       const response = await api.authFetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(api.getToken() && { 'Authorization': `Bearer ${api.getToken()}` }),
-        },
+        // Case-law answers read full opinions — same budget as api.query.
+        timeout: 180000,
         body: JSON.stringify({
           query: caseQueryIncludeDocs
             ? `Based on this case AND any relevant documents from my knowledge base, answer the following question:
@@ -124,7 +123,7 @@ Question: ${userQuery}`,
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Query failed. Please check that you have entered an API key in Settings.');
+        throw new Error(formatErrorDetail(errorData.detail, 'Query failed. Please check that you have entered an API key in Settings.'));
       }
       const data = await response.json();
       const assistantMsg: CaseMessage = { id: Date.now() + 1, type: 'assistant', content: data.content };

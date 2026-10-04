@@ -16,9 +16,10 @@ This guide covers the three supported deployment modes for CaseCite.
 
 ```bash
 # 1. Clone and configure
-git clone <repo-url> && cd "CaseCite"
+git clone https://github.com/thomasunise/casecite.git && cd casecite
 cp .env.example .env
-# Edit .env — set at minimum OPENAI_API_KEY
+# Edit .env — set one provider key (e.g. OPENAI_API_KEY), or leave them all
+# empty and save a personal key under Settings after signing in
 
 # 2. Start backend (Docker)
 docker compose -f docker-compose.dev.yml up -d
@@ -35,23 +36,40 @@ cd frontend && npm install && npm run dev
 
 ## Coolify / Single Container
 
-The unified `Dockerfile` builds both frontend and backend into one container with nginx serving static files and proxying API requests to uvicorn.
+The unified `Dockerfile` builds both frontend and backend into one container with nginx serving static files and proxying API requests to uvicorn. It does **not** include PostgreSQL or Redis — provide both (managed services, or containers you run yourself) and terminate TLS in a reverse proxy in front of the container.
+
+Production mode fails closed: every variable below is required, and the secrets must be **generated once and kept** — generating them inline on each `docker run` would make every document, stored API key and audit entry from the previous run unreadable.
 
 ```bash
-# Build
-docker build -t casecite .
+# 1. Generate the secrets ONCE and keep the file (chmod 600; never commit it)
+cat > casecite.env <<EOF
+SECRET_KEY=$(openssl rand -hex 32)
+ENCRYPTION_SALT=$(openssl rand -hex 16)
+AUDIT_HMAC_KEY=$(openssl rand -hex 32)
+REGISTRATION_BOOTSTRAP_TOKEN=$(openssl rand -hex 16)
+DATABASE_URL=postgresql+asyncpg://user:pass@db-host:5432/casecite
+DB_SSL=require
+REDIS_URL=redis://:password@redis-host:6379/0
+CORS_ORIGINS=https://app.yourfirm.com
+ALLOWED_HOSTS=app.yourfirm.com
+TRUSTED_PROXIES=<IP or CIDR of the reverse proxy in front of this container>
+DISK_ENCRYPTION_ACKNOWLEDGED=true
+EOF
+chmod 600 casecite.env
 
-# Run
-docker run -p 80:80 \
-  -e OPENAI_API_KEY=sk-... \
-  -e SECRET_KEY=$(openssl rand -hex 32) \
-  -e ENCRYPTION_SALT=$(openssl rand -hex 16) \
-  -e DATABASE_URL=postgresql+asyncpg://user:pass@host/db \
+# 2. Build and run. The named volume holds uploads, the vector index, audit
+#    logs and the key store — without it they are lost when the container is
+#    replaced.
+docker build -t casecite .
+docker run -d --name casecite -p 127.0.0.1:8080:80 \
+  --env-file casecite.env \
   -v casecite_data:/app/data \
   casecite
 ```
 
-For Coolify: point to the repo, set environment variables in the Coolify dashboard, and deploy. The health check endpoint is `GET /health`.
+`DISK_ENCRYPTION_ACKNOWLEDGED=true` is a statement that the disks behind the data volume, the Postgres database and the Redis instance are encrypted — set it only once that is true. `DB_SSL=require` is for a database reached over a network; use `DB_SSL=internal` only for a Postgres on the same isolated Docker network. Redis must run with `maxmemory-policy noeviction` (see `docker-compose.prod.yml` for why).
+
+For Coolify, follow [deploy/COOLIFY-SETUP.md](../deploy/COOLIFY-SETUP.md): it uses the root `docker-compose.yml`, which declares the persistent data volume. The health check endpoint is `GET /health`.
 
 ---
 
@@ -76,20 +94,54 @@ Before going live, have to hand: the domain and DNS control; each provider
 API key the firm will use (the install brings its own keys); for SSO, the
 Azure AD tenant ID and app registration; for connectors, the OAuth client
 credentials of each service; the firm's data- and audit-retention policy; and
-host-level encryption on the disk that will hold the `rag_data` volume
-(`DISK_ENCRYPTION_ACKNOWLEDGED` is a promise you are making).
+host-level encryption on the disk that holds Docker's volumes.
+`DISK_ENCRYPTION_ACKNOWLEDGED` is a promise you are making about **three**
+volumes, not one: `rag_data` (uploads, vector index, audit logs),
+`postgres_data` (chat history, analyses, clause text) and `redis_data` (job
+results). Encrypting `/var/lib/docker` (LUKS, or the provider's encrypted
+disk) covers all three.
 
 ```bash
-# 1. Generate secrets
-python scripts/setup_production.py --create-env
-# Review and edit .env with your values
+# 1. Generate .env with fresh secrets (written with mode 0600; refuses to
+#    overwrite an existing .env)
+python3 scripts/setup_production.py --create-env --domain app.yourfirm.com
+# Review .env. Once the disk is encrypted, set DISK_ENCRYPTION_ACKNOWLEDGED=true
+# (or pass --disk-encrypted above).
 
 # 2. Validate configuration
-python scripts/setup_production.py --validate
+python3 scripts/setup_production.py --validate
 
 # 3. Start all services
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+Copy `SECRET_KEY`, `ENCRYPTION_SALT` and `AUDIT_HMAC_KEY` from `.env` into a
+password manager or secrets vault now. They are not in any backup, and a
+restore without them cannot decrypt the documents, the stored API keys or the
+MFA secrets.
+
+### Create the admin account
+
+The first account registered on a fresh instance becomes the admin. In
+production that registration is refused unless it carries the
+`REGISTRATION_BOOTSTRAP_TOKEN` from `.env`, so nobody else who reaches the new
+instance can claim the admin role:
+
+```bash
+DOMAIN=app.yourfirm.com
+CSRF=$(curl -s -c /tmp/casecite.jar "https://$DOMAIN/api/v1/csrf-token" \
+  | python3 -c 'import sys, json; print(json.load(sys.stdin)["csrf_token"])')
+curl -s -b /tmp/casecite.jar -H "X-CSRF-Token: $CSRF" -H 'Content-Type: application/json' \
+  -d '{"email": "you@yourfirm.com", "name": "Your Name",
+       "password": "<12+ chars, upper, lower, number, symbol>",
+       "bootstrap_token": "<REGISTRATION_BOOTSTRAP_TOKEN from .env>"}' \
+  "https://$DOMAIN/api/v1/auth/register"
+rm /tmp/casecite.jar
+```
+
+Then sign in at `https://$DOMAIN`, enrol MFA, and invite the rest of the firm
+from Settings → Users. Self-service registration stays off
+(`ALLOW_REGISTRATION=false`) unless you turn it on.
 
 This starts 4 services:
 - **caddy** — Reverse proxy with automatic Let's Encrypt certificates
@@ -119,9 +171,13 @@ All deployment modes expose these endpoints:
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /health` | Application health (returns `{"status": "healthy"}`) |
+| `GET /health` | Application health (returns `{"status": "healthy"}`; per-component detail only for an authenticated admin) |
 | `GET /ready` | Readiness check (database connectivity) |
 | `GET /metrics` | Basic metrics (uptime, request counts) — requires an admin bearer token in production |
+
+The container healthchecks probe these over loopback (`http://localhost/...`).
+`localhost` and `127.0.0.1` are always accepted as `Host` values for that
+reason, in addition to whatever `ALLOWED_HOSTS` lists.
 
 ---
 
@@ -211,8 +267,11 @@ docker compose -f docker-compose.prod.yml exec backend alembic downgrade <revisi
 
 `scripts/backup_database.sh` runs on the **host**, from the directory that
 holds `docker-compose.prod.yml` (the backend image ships neither `pg_dump` nor
-the script). It produces two files per run and encrypts both when
-`BACKUP_ENCRYPTION_KEY` is set:
+the script). It produces two files per run, encrypts both with
+`BACKUP_ENCRYPTION_KEY`, and writes a `.sha256` checksum next to each. It
+**refuses to run without `BACKUP_ENCRYPTION_KEY`** — the archives contain
+client text, chat history and password hashes — unless you set
+`BACKUP_ALLOW_UNENCRYPTED=true` because the backup target is itself encrypted:
 
 | File | Contents |
 |---|---|
@@ -227,7 +286,21 @@ the script). It produces two files per run and encrypts both when
 
 Keep `BACKUP_ENCRYPTION_KEY` somewhere other than this server (password
 manager, KMS). Without it the `.enc` files are unrecoverable, and with it on
-the same disk the encryption protects nothing.
+the same disk the encryption protects nothing. Do not put it in the
+deployment's `.env`: that file is injected into the backend container.
+
+**What a backup does not contain.** `.env` is not backed up. `SECRET_KEY`,
+`ENCRYPTION_SALT` and `AUDIT_HMAC_KEY` must be escrowed separately (password
+manager, secrets vault): without the first two, a restored instance cannot
+decrypt uploaded documents, stored API keys, connector tokens or MFA secrets;
+without the third, the restored audit log fails verification at startup.
+
+While the data volume is archived the backend container is paused (requests
+wait) so the vector index is captured in a consistent state; set
+`BACKUP_PAUSE_BACKEND=false` to skip that. Local files and S3 copies older
+than `BACKUP_RETENTION_DAYS` (default 30) are deleted. Content a user deletes
+therefore remains recoverable from backups for up to that long — set the
+retention to match the firm's deletion policy.
 
 Managed/external Postgres: set `BACKUP_MODE=direct` with `POSTGRES_HOST`,
 `POSTGRES_USER`, `PGPASSWORD` and `pg_dump` on the host, plus `DATA_VOLUME`
@@ -235,9 +308,11 @@ Managed/external Postgres: set `BACKUP_MODE=direct` with `POSTGRES_HOST`,
 archived.
 
 **Restore** — always from the same run, otherwise document records and their
-vectors drift out of sync. The script stops the backend, recreates the
-database, restores the dump and (with `--data`) the volume, then starts the
-backend, which applies any pending migrations:
+vectors drift out of sync. The script first verifies both archives (checksum,
+then a full decrypt and integrity pass) and only then stops the backend,
+recreates the database, restores the dump and (with `--data`) the volume, and
+starts the backend, which applies any pending migrations. The instance must be
+running with the original `SECRET_KEY`, `ENCRYPTION_SALT` and `AUDIT_HMAC_KEY`:
 
 ```bash
 BACKUP_ENCRYPTION_KEY=… ./scripts/restore_database.sh \
@@ -302,7 +377,8 @@ Mount the files in `docker-compose.prod.yml` under the `caddy` service:
 **The app won't start** — `docker compose -f docker-compose.prod.yml logs backend`.
 Production fails closed on purpose: the log names the missing or placeholder
 setting (`SECRET_KEY`, `AUDIT_HMAC_KEY`, `ENCRYPTION_SALT`, `POSTGRES_PASSWORD`,
-`REDIS_PASSWORD`, `DISK_ENCRYPTION_ACKNOWLEDGED`, a provider key). An
+`REDIS_PASSWORD`, `DISK_ENCRYPTION_ACKNOWLEDGED`, `CORS_ORIGINS`). A provider
+key is not required to boot — users can each save their own under Settings. An
 `AUDIT ENTRY HMAC MISMATCH` at boot means the audit chain failed verification —
 see `docs/secret-rotation.md` before overriding it.
 
@@ -338,10 +414,10 @@ docker compose -f docker-compose.prod.yml exec caddy cat /data/access.log
 
 ### Audit Logs
 
-Audit logs are stored in `/app/data/audit_logs/` inside the backend container, rotated daily in JSONL format. They include chain hashing for tamper detection.
+Audit logs are stored in `/app/data/audit_logs/` inside the backend container, one `audit_YYYY-MM-DD.jsonl` file per UTC day. Each entry carries an HMAC-SHA256 hash chained to the previous entry, so an edited, removed or reordered entry is detectable. Admins can also read and verify the log in the product (Settings → Audit Log) or over the API (`GET /api/v1/admin/audit/logs`, `GET /api/v1/admin/audit/verify`).
 
 ```bash
 # View today's audit log
 docker compose -f docker-compose.prod.yml exec backend \
-  cat /app/data/audit_logs/$(date +%Y-%m-%d).jsonl | head -20
+  sh -c 'head -20 /app/data/audit_logs/audit_$(date -u +%Y-%m-%d).jsonl'
 ```

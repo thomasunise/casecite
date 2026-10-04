@@ -1,22 +1,25 @@
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
 from app.config import settings
 from app.models.schemas import ConnectorType
-from app.services.connectors.base import BaseConnector, FileInfo
+from app.services.connectors.base import BaseConnector, ConnectorError, FileInfo
 
 
 class ClioConnector(BaseConnector):
     """Clio practice-management connector using OAuth 2.0.
 
     Documents are listed flat via the v4 documents endpoint (Clio's own
-    pagination), so the crawl needs no folder recursion.
+    pagination), so the crawl needs no folder recursion. That also means a
+    sync cannot be limited to one folder: a folder-scoped sync is refused and
+    only an explicit full-account sync is available.
     """
 
     connector_type = ConnectorType.CLIO
+    supports_folder_sync = False
 
     @property
     def is_configured(self) -> bool:
@@ -98,12 +101,12 @@ class ClioConnector(BaseConnector):
     async def _ensure_valid_token(self):
         """Ensure we have a valid access token."""
         if not self.credentials.get("access_token"):
-            raise Exception("Not authenticated")
+            raise ConnectorError("Not authenticated")
 
         expires_at = self.credentials.get("expires_at", 0)
         if datetime.now(UTC).timestamp() >= expires_at - 60:
             if not await self.refresh_token():
-                raise Exception("Failed to refresh token")
+                raise ConnectorError("Failed to refresh token")
 
     def _auth_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.credentials['access_token']}"}
@@ -134,8 +137,11 @@ class ClioConnector(BaseConnector):
 
         Clio's v4 pagination hands back a full next-page URL in
         meta.paging.next; that URL is used verbatim as the page token.
-        folder_id is ignored — the flat listing already covers everything.
+        The listing is flat and account-wide, so a folder_id is rejected
+        rather than silently ignored.
         """
+        if folder_id:
+            raise ConnectorError("Clio cannot list a single folder")
         await self._ensure_valid_token()
 
         if page_token:
@@ -172,9 +178,11 @@ class ClioConnector(BaseConnector):
                         mime_type=item.get("content_type", "application/octet-stream"),
                         size=item.get("size", 0),
                         modified_at=modified_at,
+                        # Namespaced: a bare "matter_id" would collide with
+                        # CaseCite's own matter (access-scope) field downstream.
                         metadata={
-                            "matter_id": matter.get("id"),
-                            "matter": matter.get("display_number"),
+                            "clio_matter_id": matter.get("id"),
+                            "clio_matter": matter.get("display_number"),
                         },
                     )
                 )
@@ -187,12 +195,12 @@ class ClioConnector(BaseConnector):
         await self._ensure_valid_token()
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(
-                f"{self._api}/documents/{file_id}/download",
+            return await self._download_capped(
+                client,
+                "GET",
+                f"{self._api}/documents/{quote(file_id, safe='')}/download",
                 headers=self._auth_headers(),
             )
-            response.raise_for_status()
-            return response.content
 
 
 clio_connector = ClioConnector()

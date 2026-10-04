@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { registerReset } from './resetRegistry';
 import { api, API_BASE_URL } from '../api';
+import { formatErrorDetail } from '../api/client';
 import { persistWorkspaceSession, resetWorkspaceSessionKey } from './workspaceSessionsStore';
 import logger from '../utils/logger';
 import { useUIStore } from './uiStore';
@@ -140,7 +141,7 @@ export const useJudgeIntelStore = create<JudgeIntelState>((set, get) => {
         set({ judgeIntelMetrics: await response.json() });
       } else {
         const errorData = await response.json().catch(() => ({}));
-        set({ judgeIntelMetrics: { metrics: {}, error: errorData.detail || 'Analytics unavailable' } });
+        set({ judgeIntelMetrics: { metrics: {}, error: formatErrorDetail(errorData.detail, 'Analytics unavailable') } });
       }
     } catch (error: unknown) {
       logger.error('Metrics error:', error);
@@ -163,7 +164,7 @@ export const useJudgeIntelStore = create<JudgeIntelState>((set, get) => {
       const response = await api.authFetch(`${API_BASE_URL}/judge-intel/search?q=${encodeURIComponent(judgeIntelSearch)}&limit=500`);
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Search failed');
+        throw new Error(formatErrorDetail(errorData.detail, 'Search failed'));
       }
       const data = await response.json();
       set({ judgeIntelResults: data });
@@ -202,7 +203,7 @@ export const useJudgeIntelStore = create<JudgeIntelState>((set, get) => {
       );
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Build failed');
+        throw new Error(formatErrorDetail(errorData.detail, 'Build failed'));
       }
       const data = await response.json();
       set({ judgeIntelProfile: data.profile, judgeIntelBuildProgress: '', judgeBrief: null });
@@ -279,10 +280,8 @@ ${profile.wikipedia_personal_life ? `PERSONAL LIFE:\n${profile.wikipedia_persona
       const hasDockets = (profile.docket_stats?.total_dockets ?? 0) > 0;
       const response = await api.authFetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(api.getToken() && { 'Authorization': `Bearer ${api.getToken()}` }),
-        },
+        // Case-law answers read full opinions — same budget as api.query.
+        timeout: 180000,
         body: JSON.stringify({
           query: `CRITICAL INSTRUCTIONS - READ CAREFULLY:
 You are writing a COMPLETED judicial intelligence brief. You must write ACTUAL ANALYSIS based ONLY on the data provided below.
@@ -405,10 +404,8 @@ ASSIGNED CASES/DOCKETS:
 
       const response = await api.authFetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(api.getToken() && { 'Authorization': `Bearer ${api.getToken()}` }),
-        },
+        // Case-law answers read full opinions — same budget as api.query.
+        timeout: 180000,
         body: JSON.stringify({
           query: `You are a legal intelligence analyst. Answer the following question about this judge using ALL available data. Be thorough and cite specific cases/data points when relevant.
 
@@ -473,7 +470,7 @@ Provide a thorough, well-reasoned answer based on the judge data above.${judgeQu
       const response = await api.authFetch(url);
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || 'Could not load opinions');
+        throw new Error(formatErrorDetail(errorData.detail, 'Could not load opinions'));
       }
       const data = await response.json();
 
@@ -503,7 +500,7 @@ Provide a thorough, well-reasoned answer based on the judge data above.${judgeQu
         set({ selectedOpinion: data });
       } else {
         const errorData = await response.json().catch(() => ({}));
-        useUIStore.getState().addToast(errorData.detail || 'Could not load that opinion', 'error');
+        useUIStore.getState().addToast(formatErrorDetail(errorData.detail, 'Could not load that opinion'), 'error');
       }
     } catch (error: unknown) {
       logger.error('Opinion load error:', error);

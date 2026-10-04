@@ -7,6 +7,12 @@ repos:
       - id: check-yaml
       - id: check-json
       - id: check-merge-conflict
+      - id: detect-private-key
+  # Secret scanning before a commit is created (CI runs the same tool on push).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.4
     hooks:

@@ -8,12 +8,16 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from sqlalchemy import or_, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models.clause_intel import ContractAnalysisRun
+from app.models.clause_intel import (
+    ClauseDeviationFinding,
+    ClauseTagFinding,
+    ContractAnalysisRun,
+)
 from app.models.contract_analysis import (
     ContractDeadline,
     ContractDefinedTerm,
@@ -57,6 +61,7 @@ from app.services.permissions import require_permission
 from app.services.user_keys import UserAPIKeys
 from app.services.user_settings import load_user_settings
 from app.utils.error_handler import handle_service_error
+from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,26 @@ def _run_accessible(run, user_id: str, accessible_matter_ids: set[str] | None) -
     if run.user_id and run.user_id == user_id:
         return True
     return bool(accessible_matter_ids and run.matter_id and run.matter_id in accessible_matter_ids)
+
+
+async def _audit(
+    http_request: Request,
+    current_user: TokenData,
+    event_type: AuditEventType,
+    action: str,
+    analysis_id: str | None = None,
+    **details,
+) -> None:
+    """Audit a read/export/delete of contract work product (ids only, no text)."""
+    await audit_service.log_event(
+        event_type=event_type,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="contract_analysis",
+        resource_id=analysis_id,
+        ip_address=get_client_ip(http_request),
+        details={"action": action, **details},
+    )
 
 
 @router.post("/analyze")
@@ -461,13 +486,12 @@ async def generate_long_draft(
 
 @router.get("/analyses")
 async def list_analyses(
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     current_user: TokenData = require_permission("contracts.use"),
     db: AsyncSession = Depends(get_db),
     accessible_matters: set[str] = Depends(accessible_matter_ids),
 ):
     """List the caller's contract analyses (own + shared matters), newest first."""
-    limit = max(1, min(limit, 200))
     scope = ContractAnalysisRun.user_id == current_user.user_id
     if accessible_matters:
         scope = or_(scope, ContractAnalysisRun.matter_id.in_(list(accessible_matters)))
@@ -500,6 +524,7 @@ async def list_analyses(
 @router.get("/analyses/{analysis_id}")
 async def get_full_analysis(
     analysis_id: str,
+    http_request: Request,
     current_user: TokenData = require_permission("contracts.use"),
     db: AsyncSession = Depends(get_db),
     accessible_matters: set[str] = Depends(accessible_matter_ids),
@@ -510,6 +535,14 @@ async def get_full_analysis(
     if not run or not _run_accessible(run, current_user.user_id, accessible_matters):
         # Owner or a member of the run's matter; a null-owner run is nobody's.
         raise HTTPException(status_code=404, detail="Analysis not found")
+    await _audit(
+        http_request,
+        current_user,
+        AuditEventType.DATA_ACCESS,
+        "contract_analysis_view",
+        analysis_id,
+        document_id=run.document_id,
+    )
 
     parties = (
         (await db.execute(select(ContractParty).where(ContractParty.analysis_id == analysis_id)))
@@ -616,12 +649,57 @@ async def get_full_analysis(
     }
 
 
+@router.delete("/analyses/{analysis_id}")
+async def delete_analysis(
+    analysis_id: str,
+    http_request: Request,
+    current_user: TokenData = require_permission("contracts.use"),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Delete a stored analysis and everything derived from it. Owner only.
+
+    An analysis holds verbatim contract text (issues, quotes, parties,
+    obligations, redlines), so its owner must be able to remove it. Uniform
+    404 for runs the caller does not own.
+    """
+    run = (
+        await db.execute(select(ContractAnalysisRun).where(ContractAnalysisRun.id == analysis_id))
+    ).scalar_one_or_none()
+    if not run or not run.user_id or run.user_id != current_user.user_id:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    document_id = run.document_id
+    # The child tables have no FK cascade to the run — delete them explicitly.
+    for child in (
+        ContractParty,
+        ContractObligation,
+        ContractDeadline,
+        ContractDefinedTerm,
+        ClauseDeviationFinding,
+        ClauseTagFinding,
+    ):
+        await db.execute(delete(child).where(child.analysis_id == analysis_id))
+    await db.delete(run)
+    await db.commit()
+
+    await _audit(
+        http_request,
+        current_user,
+        AuditEventType.DATA_DELETION,
+        "contract_analysis_deleted",
+        analysis_id,
+        document_id=document_id,
+    )
+    return {"status": "deleted", "id": analysis_id}
+
+
 _DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 @router.get("/analyses/{analysis_id}/export")
 async def export_analysis(
     analysis_id: str,
+    http_request: Request,
     format: str = Query("md", description='"md" or "docx"'),
     current_user: TokenData = require_permission("contracts.use"),
     db: AsyncSession = Depends(get_db),
@@ -695,6 +773,16 @@ async def export_analysis(
             for d in deadlines
         ],
     }
+
+    await _audit(
+        http_request,
+        current_user,
+        AuditEventType.DATA_EXPORT,
+        "contract_analysis_export",
+        analysis_id,
+        format=fmt,
+        document_id=run.document_id,
+    )
 
     filename = f"contract-analysis-{run.id[:8]}"
     if fmt == "md":
@@ -844,6 +932,14 @@ async def compare_documents(
         endpoint="/contract-analysis/compare",
         retry_policy=RETRY_POLICIES["ai_analysis"],
     )
+    await _audit(
+        http_request,
+        current_user,
+        AuditEventType.DATA_ACCESS,
+        "contract_compare_submit",
+        job_id=job_id,
+        document_ids=doc_ids,
+    )
     return JSONResponse(
         status_code=202,
         content={"type": "compare_started", "job_id": job_id, "poll_url": f"/api/v1/jobs/{job_id}"},
@@ -853,10 +949,18 @@ async def compare_documents(
 @router.post("/draft-export")
 async def export_draft(
     request: DraftExportRequest,
+    http_request: Request,
     current_user: TokenData = require_permission("contracts.use"),
 ):
     """Render a drafted document as a Word file."""
     payload = render_draft_docx(request.title, request.text)
+    await _audit(
+        http_request,
+        current_user,
+        AuditEventType.DATA_EXPORT,
+        "contract_draft_export",
+        chars=len(request.text),
+    )
     ascii_title = request.title.encode("ascii", "ignore").decode()
     safe_name = "".join(c for c in ascii_title if c.isalnum() or c in " -_").strip()[:60] or "draft"
     return StreamingResponse(
@@ -870,6 +974,7 @@ async def export_draft(
 async def export_redlines_post(
     analysis_id: str,
     request: RedlineExportRequest,
+    http_request: Request,
     current_user: TokenData = require_permission("contracts.use"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -880,13 +985,17 @@ async def export_redlines_post(
         overrides=request.overrides,
         current_user=current_user,
         db=db,
+        http_request=http_request,
     )
 
 
 @router.get("/analyses/{analysis_id}/redline-export")
 async def export_redlines(
     analysis_id: str,
-    exclude: str = Query("", description="Comma-separated issue refs to leave out"),
+    http_request: Request,
+    exclude: str = Query(
+        "", description="Comma-separated issue refs to leave out", max_length=20_000
+    ),
     current_user: TokenData = require_permission("contracts.use"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -897,6 +1006,7 @@ async def export_redlines(
         overrides={},
         current_user=current_user,
         db=db,
+        http_request=http_request,
     )
 
 
@@ -907,6 +1017,7 @@ async def _export_redlines(
     overrides: dict[str, str],
     current_user: TokenData,
     db: AsyncSession,
+    http_request: Request,
 ):
     run = (
         await db.execute(select(ContractAnalysisRun).where(ContractAnalysisRun.id == analysis_id))
@@ -976,6 +1087,16 @@ async def _export_redlines(
             status_code=500,
             detail="Redline export failed an integrity check and was not produced.",
         )
+    await _audit(
+        http_request,
+        current_user,
+        AuditEventType.DATA_EXPORT,
+        "contract_redline_export",
+        analysis_id,
+        document_id=run.document_id,
+        rendered=len(located),
+        omitted=len(omitted),
+    )
     return StreamingResponse(
         iter([payload]),
         media_type=_DOCX_MIME,

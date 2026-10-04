@@ -4,8 +4,9 @@ Legal Tools - Helper methods, constants, and shared state.
 
 import html as html_lib
 import re
-from datetime import date, datetime
 from typing import Any
+
+from app.services.courtlistener_client import CourtListenerClientBase
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _WS_RE = re.compile(r"\s+")
@@ -81,11 +82,6 @@ def order_citations(citations: list[Any]) -> list[str]:
     return sorted(strings, key=_citation_rank)
 
 
-def preferred_citation(citations: list[Any]) -> str | None:
-    ordered = order_citations(citations)
-    return ordered[0] if ordered else None
-
-
 def citation_dict_to_string(c: Any) -> str | None:
     """Cluster endpoints return citations as {volume, reporter, page} dicts."""
     if isinstance(c, str):
@@ -115,41 +111,15 @@ def trailing_id(url: str | None) -> int | None:
     return int(m.group(1)) if m else None
 
 
-class HelpersMixin:
-    """Mixin providing helper methods and shared attributes for legal tools."""
+class HelpersMixin(CourtListenerClientBase):
+    """Mixin providing helper methods and shared attributes for legal tools.
 
-    BASE_URL = "https://www.courtlistener.com/api/rest/v4"
-
-    # These are set by LegalToolsService.__init__
-    api_token: str | None
-    headers: dict[str, str]
+    Token handling, date parsing and the jurisdiction map come from the shared
+    CourtListener client base.
+    """
 
     # court_id → full court name; courts never change, so process-lifetime cache.
     _court_names: dict[str, str] = {}
-
-    def set_token(self, token: str | None) -> None:
-        """Update the active CourtListener token at runtime.
-
-        Called at startup and by the admin integrations endpoint so the
-        instance-wide token (DB) overrides the .env fallback without a restart.
-        Passing a falsy token reverts to anonymous (lower rate limit).
-        """
-        self.api_token = token if token and token.strip() else None
-        self.headers = {"Accept": "application/json"}
-        if self.api_token:
-            self.headers["Authorization"] = f"Token {self.api_token}"
-
-    def _check_token(self):
-        """Raise error if no API token configured."""
-        if not self.api_token:
-            raise ValueError(
-                "CourtListener API token required. "
-                "Get a FREE token at https://www.courtlistener.com/help/api/rest/#permissions "
-                "(1) Create account at courtlistener.com, "
-                "(2) Go to Profile > API section, "
-                "(3) Create token and add COURTLISTENER_API_TOKEN=your_token to .env file, "
-                "(4) Restart the backend server."
-            )
 
     async def _court_name(self, client: Any, court_id: str | None) -> str | None:
         """Resolve a court id (``scotus``, ``cafc``) to its full name, cached."""
@@ -169,51 +139,3 @@ class HelpersMixin:
         except Exception:  # a missing court name never fails the tool
             pass
         return None
-
-    def _parse_date(self, date_str: str | None) -> date | None:
-        """Parse date string from API."""
-        if not date_str:
-            return None
-        try:
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
-        except (ValueError, AttributeError):
-            try:
-                return datetime.strptime(date_str[:10], "%Y-%m-%d").date()
-            except (ValueError, TypeError, AttributeError):
-                return None
-
-    def _get_courts_for_jurisdiction(self, jurisdiction: str) -> list[str]:
-        """Map jurisdiction to CourtListener court IDs."""
-        jurisdiction_courts = {
-            "federal": [
-                "scotus",
-                "ca1",
-                "ca2",
-                "ca3",
-                "ca4",
-                "ca5",
-                "ca6",
-                "ca7",
-                "ca8",
-                "ca9",
-                "ca10",
-                "ca11",
-                "cadc",
-                "cafc",
-            ],
-            "scotus": ["scotus"],
-            "supreme_court": ["scotus"],
-            "ninth_circuit": ["ca9"],
-            "ca9": ["ca9"],
-            "second_circuit": ["ca2"],
-            "ca2": ["ca2"],
-            "dc_circuit": ["cadc"],
-            "cadc": ["cadc"],
-            "federal_circuit": ["cafc"],
-            "california": ["cal", "calctapp"],
-            "new_york": ["ny", "nyappdiv", "nysupct"],
-            "texas": ["tex", "texapp", "texcrimapp"],
-            "florida": ["fla", "flaapp"],
-            "immigration": ["bia"],
-        }
-        return jurisdiction_courts.get(jurisdiction.lower(), [])

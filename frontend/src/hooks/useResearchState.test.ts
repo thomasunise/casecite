@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import type { RagSettings } from '../types';
 
 vi.mock('../api', () => ({
   api: {
@@ -19,31 +18,9 @@ vi.mock('../utils', () => ({
 import { useResearchState } from './useResearchState';
 import { api } from '../api';
 
-const mockRagSettings: RagSettings = {
-  vectorDb: 'chroma',
-  indexName: 'test-index',
-  embeddingModel: 'text-embedding-3-small',
-  dimensions: 1536,
-  chunkSize: 512,
-  chunkOverlap: 50,
-  similarityThreshold: 0.55,
-  topK: 10,
-  enableReranking: false,
-  hybridSearch: false,
-  citationVerification: true,
-  contextCompression: false,
-  queryExpansion: false,
-  sourceTracking: true,
-  llmModel: 'gpt-5.5',
-  temperature: 0.1,
-  maxTokens: 4096,
-  batchSize: 10,
-};
-
 describe('useResearchState', () => {
   const defaultProps = {
     addToast: vi.fn(),
-    ragSettings: mockRagSettings,
     activeMode: 'research',
     setActiveMode: vi.fn(),
   };
@@ -61,28 +38,16 @@ describe('useResearchState', () => {
     expect(result.current.processingStage).toBe('');
     expect(result.current.selectedCitation).toBeNull();
     expect(result.current.allCitations).toEqual([]);
-    expect(result.current.citationFilter).toBe('all');
     expect(result.current.currentSessionId).toBeNull();
     expect(result.current.chatSessions).toEqual([]);
     // Intent and case-law routing are server-side now; scope is the only control.
     expect(result.current.mainDocFilter).toBeNull();
   });
 
-  it('starts with initial sessionStats', () => {
-    const { result } = renderHook(() => useResearchState(defaultProps));
-    expect(result.current.sessionStats).toEqual({
-      queries: 0,
-      citations: 0,
-      approved: 0,
-      rejected: 0,
-      pending: 0,
-    });
-  });
-
   it('does NOT hydrate citations from localStorage — sources are per-search', () => {
     // Persisted citations resurrected phantom sources from dead sessions.
     localStorage.setItem(
-      'wl_citations',
+      'casecite_citations',
       JSON.stringify([{ id: 'c1', text: 'Stale citation', status: 'pending' }])
     );
     const { result } = renderHook(() => useResearchState(defaultProps));
@@ -120,12 +85,14 @@ describe('useResearchState', () => {
       expect(api.query).toHaveBeenCalledWith(
         'What is contract law?',
         'research',
-        expect.objectContaining({ topK: 10, sessionId: null })
+        expect.objectContaining({ sessionId: null }),
+        expect.any(AbortSignal),
       );
+      // Retrieval depth comes from the user's saved settings server-side.
+      expect((api.query as any).mock.calls[0][2]).not.toHaveProperty('topK');
       expect(result.current.messages.length).toBeGreaterThanOrEqual(2); // user + assistant
       expect(result.current.inputValue).toBe('');
       expect(result.current.isProcessing).toBe(false);
-      expect(result.current.sessionStats.queries).toBe(1);
     });
 
     it('adopts the server session id and sends it on the next query', async () => {
@@ -151,7 +118,8 @@ describe('useResearchState', () => {
       expect(api.query).toHaveBeenLastCalledWith(
         'follow-up question',
         'research',
-        expect.objectContaining({ sessionId: 'sess-123' })
+        expect.objectContaining({ sessionId: 'sess-123' }),
+        expect.any(AbortSignal),
       );
     });
 
@@ -251,7 +219,6 @@ describe('useResearchState', () => {
 
       expect(result.current.currentSessionId).toBe('sess-42');
       expect(defaultProps.setActiveMode).toHaveBeenCalledWith('research');
-      expect(result.current.sessionStats.queries).toBe(2);
     });
 
     it('surfaces a toast when the session cannot be loaded', async () => {
@@ -293,34 +260,8 @@ describe('useResearchState', () => {
     });
   });
 
-  describe('handleCitationUpdate', () => {
-    it('updates citation status in allCitations', async () => {
-      (api.query as any).mockResolvedValue({
-        response: 'Answer',
-        citations: [
-          { text: 'Citation 1', source: 'doc.pdf', relevance_score: 0.9, chunk_index: 0 },
-        ],
-      });
-
-      const { result } = renderHook(() => useResearchState(defaultProps));
-      act(() => result.current.setInputValue('query'));
-      await act(async () => {
-        await result.current.handleSend();
-      });
-
-      const citationId = result.current.allCitations[0]?.id;
-      if (citationId) {
-        act(() => {
-          result.current.handleCitationUpdate(citationId, 'approved', 'Good source');
-        });
-        const updated = result.current.allCitations.find((c: any) => c.id === citationId);
-        expect(updated?.status).toBe('approved');
-      }
-    });
-  });
-
   describe('handleClearSession', () => {
-    it('resets messages, citations, session id, stats', async () => {
+    it('resets messages, citations and session id', async () => {
       (api.query as any).mockResolvedValue({
         content: 'Answer',
         citations: [],
@@ -339,75 +280,61 @@ describe('useResearchState', () => {
       expect(result.current.messages).toEqual([]);
       expect(result.current.allCitations).toEqual([]);
       expect(result.current.currentSessionId).toBeNull();
-      expect(result.current.sessionStats).toEqual({
-        queries: 0,
-        citations: 0,
-        approved: 0,
-        rejected: 0,
-        pending: 0,
-      });
     });
   });
 
-  describe('filteredCitations', () => {
-    it('filters by citationFilter', async () => {
-      (api.query as any).mockResolvedValue({
-        response: 'Answer',
-        citations: [
-          { text: 'C1', source: 'a.pdf', relevance_score: 0.9, chunk_index: 0 },
-          { text: 'C2', source: 'b.pdf', relevance_score: 0.8, chunk_index: 1 },
-        ],
-      });
+  describe('a failed or cancelled question', () => {
+    const answerWithSource = {
+      content: 'Answer',
+      citations: [{ text: 'C1', source: 'a.pdf', relevance_score: 0.9, chunk_index: 0 }],
+    };
 
+    it('keeps the sources of earlier answers when a later query fails', async () => {
+      (api.query as any).mockResolvedValueOnce(answerWithSource);
       const { result } = renderHook(() => useResearchState(defaultProps));
-      act(() => result.current.setInputValue('query'));
-      await act(async () => {
-        await result.current.handleSend();
-      });
+      act(() => result.current.setInputValue('first'));
+      await act(async () => { await result.current.handleSend(); });
+      const before = result.current.allCitations;
+      expect(before.length).toBeGreaterThan(0);
 
-      // All citations should be pending initially
-      expect(result.current.filteredCitations.length).toBe(result.current.allCitations.length);
+      (api.query as any).mockRejectedValueOnce(new Error('LLM timed out'));
+      act(() => result.current.setInputValue('second'));
+      await act(async () => { await result.current.handleSend(); });
 
-      act(() => result.current.setCitationFilter('approved'));
-      expect(result.current.filteredCitations.length).toBe(0);
-    });
-  });
-
-  describe('batch actions', () => {
-    it('handleBatchApprove sets all pending to approved', async () => {
-      (api.query as any).mockResolvedValue({
-        response: 'Answer',
-        citations: [
-          { text: 'C1', source: 'a.pdf', relevance_score: 0.9, chunk_index: 0 },
-        ],
-      });
-
-      const { result } = renderHook(() => useResearchState(defaultProps));
-      act(() => result.current.setInputValue('query'));
-      await act(async () => {
-        await result.current.handleSend();
-      });
-
-      act(() => result.current.handleBatchApprove());
-      expect(result.current.allCitations.every((c: any) => c.status === 'approved')).toBe(true);
+      expect(result.current.allCitations).toEqual(before);
+      expect(result.current.messages[result.current.messages.length - 1].isError).toBe(true);
+      expect(defaultProps.addToast).toHaveBeenCalledWith('LLM timed out', 'error');
+      expect(result.current.isProcessing).toBe(false);
     });
 
-    it('handleBatchReject sets all pending to rejected', async () => {
-      (api.query as any).mockResolvedValue({
-        response: 'Answer',
-        citations: [
-          { text: 'C1', source: 'a.pdf', relevance_score: 0.9, chunk_index: 0 },
-        ],
+    it('handleCancel aborts the in-flight request without an error toast', async () => {
+      let signal: AbortSignal | undefined;
+      (api.query as any).mockImplementation((_q: string, _m: string, _o: unknown, sig: AbortSignal) => {
+        signal = sig;
+        return new Promise((_resolve, reject) => {
+          sig.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        });
       });
 
       const { result } = renderHook(() => useResearchState(defaultProps));
-      act(() => result.current.setInputValue('query'));
+      act(() => result.current.setInputValue('slow question'));
+      let pending: Promise<void>;
+      act(() => { pending = result.current.handleSend(); });
+      expect(result.current.isProcessing).toBe(true);
+      expect(result.current.processingStartedAt).not.toBeNull();
+
       await act(async () => {
-        await result.current.handleSend();
+        result.current.handleCancel();
+        await pending;
       });
 
-      act(() => result.current.handleBatchReject());
-      expect(result.current.allCitations.every((c: any) => c.status === 'rejected')).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(result.current.isProcessing).toBe(false);
+      expect(result.current.processingStartedAt).toBeNull();
+      const last = result.current.messages[result.current.messages.length - 1];
+      expect(last.isError).toBeUndefined();
+      expect(last.content).toMatch(/^Cancelled/);
+      expect(defaultProps.addToast).not.toHaveBeenCalled();
     });
   });
 });

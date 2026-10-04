@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Any
 
-from app.models.schemas import Citation, CitationStatus
+from app.models.schemas import Citation
 
 logger = logging.getLogger(__name__)
 
@@ -193,16 +193,20 @@ def compress_context_results(
 # --------------------------------------------------------------------------- #
 # Citation verification
 # --------------------------------------------------------------------------- #
-def verify_document_citations(
-    citations: list[Citation], answer: str, min_overlap: int = 3
-) -> list[Citation]:
-    """Cross-check each document citation against the generated ``answer``.
+def verify_document_citations(citations: list[Citation], answer: str) -> list[Citation]:
+    """Mark which document citations the generated ``answer`` appears to draw on.
 
-    A citation is treated as genuinely used when its source name appears in the
-    answer, or when its passage shares at least ``min_overlap`` content words with
-    the answer. Verified citations are marked APPROVED + ``was_cited_by_ai``;
-    unsupported ones are reset to PENDING + ``was_cited_by_ai = False`` so the UI
-    no longer claims the model relied on them.
+    A citation counts as referenced when its source name appears in the answer,
+    or when a substantial share of its passage's wording does: at least 6
+    content words making up a quarter of the passage, or — for a short passage
+    — at least 3 words making up most (60%) of it. A handful of shared words is
+    not evidence: any two clauses of the same contract share "agreement",
+    "party", "termination".
+
+    This only sets ``was_cited_by_ai`` so the UI stops claiming the model relied
+    on a passage it did not use. It never changes the review ``status``:
+    APPROVED is a reviewer's decision, and a word-overlap heuristic must not
+    make it for them.
     """
     answer_l = (answer or "").lower()
     answer_kw = _keywords(answer or "")
@@ -210,12 +214,15 @@ def verify_document_citations(
     for c in citations:
         source_stem = (c.source or "").rsplit(".", 1)[0].strip().lower()
         source_hit = bool(source_stem) and source_stem in answer_l
-        overlap = len(_keywords(c.passage or "") & answer_kw)
-        verified = source_hit or overlap >= min_overlap
+        passage_kw = _keywords(c.passage or "")
+        overlap = len(passage_kw & answer_kw)
+        ratio = overlap / len(passage_kw) if passage_kw else 0.0
+        referenced = (
+            source_hit or (overlap >= 6 and ratio >= 0.25) or (overlap >= 3 and ratio >= 0.6)
+        )
 
-        c.was_cited_by_ai = verified
-        c.status = CitationStatus.APPROVED if verified else CitationStatus.PENDING
-        note = "Verified against answer" if verified else "Not referenced in answer"
+        c.was_cited_by_ai = referenced
+        note = "Referenced in the answer" if referenced else "Not referenced in answer"
         c.notes = f"{c.notes + ' | ' if c.notes else ''}{note}"
 
     return citations

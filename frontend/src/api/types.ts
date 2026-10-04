@@ -7,7 +7,6 @@ export interface BrandingConfig {
   secondary_color: string;
   accent_color: string;
   favicon_url: string | null;
-  custom_css: string | null;
   updated_at: string | null;
 }
 
@@ -42,6 +41,22 @@ export interface UserInfo {
   roles: string[]; // backend returns a list of role strings, e.g. ["admin"]
   name?: string;
   role?: string; // legacy single-role field (optional)
+  /** True for an invited account still on its admin-issued temporary password:
+      the API refuses everything except change-password / logout / me. */
+  must_change_password?: boolean;
+  mfa_enabled?: boolean;
+  /** True when the firm requires two-factor authentication and this account
+      has not enrolled yet. */
+  mfa_enrollment_required?: boolean;
+}
+
+/** One active sign-in, as returned by GET /auth/sessions. */
+export interface SessionInfo {
+  created_at: string;
+  last_activity: string;
+  /** When this sign-in ends regardless of activity (absolute session lifetime). */
+  expires_at?: string;
+  ip_address: string;
 }
 
 export interface ChatResponse {
@@ -82,8 +97,6 @@ export interface ChatQueryOptions {
   caseLawLimit?: number;
   includeDocuments?: boolean;
   documentFilter?: string | null;
-  topK?: number;
-  similarityThreshold?: number;
   /** Persisted chat session to append this exchange to (null = start new). */
   sessionId?: string | null;
   [key: string]: unknown;
@@ -130,7 +143,6 @@ export interface RAGSettings {
   chunkOverlap: number;
   embeddingModel: string;
   dimensions: number;
-  batchSize?: number;
   llmModel?: string;
   temperature?: number;
   maxTokens?: number;
@@ -205,6 +217,7 @@ export interface ConnectorDataResponse {
     id: string;
     connected?: boolean;
     configured?: boolean;
+    admin_only?: boolean;
     docs_indexed?: number;
   }>;
   [key: string]: unknown;
@@ -276,7 +289,16 @@ export interface StrategyBriefResponse {
     folder_path?: string | null;
     documents_considered: number;
     documents_total: number;
+    /** Passages the synthesis actually read (the most relevant per document). */
+    passages_read?: number;
+    passages_per_document?: number;
+    /** True when more documents were in scope than the brief could read. */
+    truncated?: boolean;
+    /** Server-written sentence stating exactly what was and was not read. */
+    coverage_note?: string;
   };
+  /** Case references the model offered that could not be verified and were removed. */
+  case_law_removed?: string[];
   position: string;
   strengths: StrategyBriefPoint[];
   weaknesses: StrategyBriefPoint[];
@@ -288,6 +310,8 @@ export interface StrategyBriefResponse {
     points_searched: number;
     /** Opinions whose full text was actually retrieved and judged. */
     opinions_read: number;
+    /** Opinions too long to judge in full — only their opening windows were read. */
+    partially_read?: number;
     attached: number;
     /** Candidates dropped because no usable opinion text could be retrieved. */
     unreadable?: number;
@@ -306,21 +330,14 @@ export interface StrategyBriefResponse {
   } | null;
 }
 
-// ==================== Case Comparison Response Types ====================
-
-interface CaseComparisonResponse {
-  case_name: string;
-  case_citation?: string;
-  strength_rating: string;
-  documents_searched: number;
-  confidence_score: number;
-  key_holdings?: string[];
-  applicability_analysis?: string;
-  supporting_points?: string[];
-  distinguishing_factors?: string[];
-  relevant_doc_passages?: Array<{ source: string; text: string }>;
-  recommendation?: string;
-  [key: string]: unknown;
+/** POST /settings/reindex — per-document failures are listed, not hidden. */
+export interface ReindexResult {
+  status: string;
+  reindexed: number;
+  /** One "filename: reason" line per document that could not be re-indexed. */
+  errors: string[];
+  embedding_model?: string;
+  message?: string;
 }
 
 // ==================== Document List Response Types ====================
@@ -387,6 +404,9 @@ export interface AdminUser {
   is_active: boolean;
   created_at?: string | null;
   last_login?: string | null;
+  mfa_enabled?: boolean;
+  /** Still on the admin-issued temporary password. */
+  must_change_password?: boolean;
 }
 
 export interface InviteUserResult {
@@ -399,6 +419,40 @@ interface PermissionInfo {
   label: string;
   description: string;
   group: string;
+}
+
+/** One tamper-evident audit entry. The server returns the stored record as-is
+    (emails and IPs are partially masked in the trail by design). */
+export interface AuditLogEntry {
+  id: string;
+  timestamp: string;
+  event_type: string;
+  user?: { id?: string | null; email?: string | null } | null;
+  resource?: { type?: string | null; id?: string | null } | null;
+  action?: Record<string, unknown> | null;
+  context?: { ip_address?: string | null; user_agent?: string | null; environment?: string | null } | null;
+  outcome?: { success?: boolean; error?: string | null } | null;
+  integrity?: { previous_hash?: string | null; entry_hash?: string | null; hash_version?: number | null } | null;
+}
+
+export interface AuditLogQuery {
+  startDate?: string;
+  endDate?: string;
+  eventType?: string;
+  userId?: string;
+  limit?: number;
+}
+
+export interface AuditVerifyResult {
+  valid: boolean;
+  entries_checked: number;
+  first_invalid_id?: string | null;
+  /** Why verification failed, when it did. */
+  reason?: string | null;
+  /** Entries written before chain linkage was enforced (signature-checked only). */
+  legacy_entries?: number;
+  /** True when the range held more entries than one verification scans. */
+  truncated?: boolean;
 }
 
 export interface RolePermissionsMatrix {
@@ -428,6 +482,7 @@ export interface WorkspaceSessionDetail extends WorkspaceSessionSummary {
 
 export interface RequestOptions extends RequestInit {
   headers?: Record<string, string>;
+  /** Abort after this many ms (request: 30s default, authFetch: 120s). */
   timeout?: number;
   _retried?: boolean;
 }
@@ -463,6 +518,20 @@ export interface AuthorityMapping {
   reasoning?: AuthorityMappingReasoning | null;
 }
 
+/** What the authority mapper's bounds left out of one run (summary.coverage). */
+export interface AuthorityMapCoverage {
+  document_chars?: number;
+  document_chars_read?: number;
+  document_windows_read?: number;
+  document_windows_failed?: number;
+  document_truncated?: boolean;
+  propositions_identified?: number;
+  propositions_researched?: number;
+  propositions_limit?: number;
+  opinions_checked?: number;
+  opinions_partially_read?: number;
+}
+
 export interface AuthorityMapResult {
   run_id: string;
   document_name: string | null;
@@ -472,6 +541,7 @@ export interface AuthorityMapResult {
     authorities?: number;
     verified?: number;
     courtlistener?: number;
+    coverage?: AuthorityMapCoverage;
   };
   mappings: AuthorityMapping[];
 }
@@ -487,6 +557,8 @@ export interface AuthorityMapJob {
 export interface AuthorityMapChatResult {
   files: (AuthorityMapResult & { document_id?: string | null })[];
   totals: { files: number; propositions: number; authorities: number; verified: number };
+  /** One sentence per file the map did not cover in full — empty when all were. */
+  coverage_notes?: string[];
 }
 
 export interface AuthorityMapChatJob {
@@ -627,6 +699,8 @@ export interface ContractDraft {
   references_mode?: 'full' | 'excerpts' | 'none';
   /** Revisions only: which sections were rewritten, or "all". */
   revised_sections?: number[] | 'all';
+  /** Case references the server could not verify and removed from the draft. */
+  case_law_removed?: string[];
 }
 
 /** One planned section of a long draft. The user can edit every field. */
@@ -730,14 +804,6 @@ export interface ContractAnalysisListItem {
   issues: number;
 }
 
-export interface ContractAnalyzePayload {
-  documentId?: string | null;
-  documentText?: string | null;
-  contractType?: string | null;
-  representing?: string | null;
-  posture?: 'balanced' | 'strict';
-}
-
 // ==================== Contract Chat Types ====================
 
 export interface ContractChatCitation {
@@ -779,6 +845,8 @@ interface ContractChatAnswer {
   type: 'answer';
   answer: string;
   citations: ContractChatCitation[];
+  /** Case references the server could not verify and removed from the answer. */
+  case_law_removed?: string[];
 }
 
 interface ContractChatClarify {
@@ -838,22 +906,26 @@ export interface ApiClient {
 
   // Auth
   login(email: string, password: string): Promise<AuthResponse>;
-  refreshToken(): Promise<AuthResponse | null>;
   logout(): Promise<void>;
   getCurrentUser(): Promise<UserInfo>;
-  register(email: string, name: string, password: string, company: string): Promise<AuthResponse>;
+  register(email: string, name: string, password: string, company: string, bootstrapToken?: string): Promise<AuthResponse>;
   forgotPassword(email: string): Promise<MessageResponse>;
+  verifyResetToken(token: string): Promise<{ valid: boolean }>;
+  resetPassword(token: string, newPassword: string): Promise<MessageResponse>;
+  changePassword(currentPassword: string, newPassword: string): Promise<{ status: string }>;
+  getSessions(): Promise<{ sessions: SessionInfo[] }>;
+  logoutAllSessions(): Promise<{ status: string }>;
 
   // MFA
   getMfaStatus(): Promise<MfaStatus>;
   setupMfa(): Promise<MfaSetup>;
   enableMfa(code: string): Promise<MfaRecoveryCodes>;
-  disableMfa(code: string): Promise<{ status: string }>;
+  disableMfa(code: string, password: string): Promise<{ status: string }>;
   verifyMfa(mfaToken: string, code: string): Promise<AuthResponse>;
   regenerateRecoveryCodes(code: string): Promise<MfaRecoveryCodes>;
 
   // Chat
-  query(message: string, mode: string, options?: ChatQueryOptions): Promise<ChatResponse>;
+  query(message: string, mode: string, options?: ChatQueryOptions, signal?: AbortSignal): Promise<ChatResponse>;
 
   // Chat Sessions (persistent conversations)
   listChatSessions(): Promise<ChatSessionListResponse>;
@@ -866,10 +938,9 @@ export interface ApiClient {
   getKeyStatus(): Promise<Record<string, boolean>>;
   getMaskedKeys(): Promise<Record<string, string | null>>;
   saveApiKey(keyType: string, apiKey: string): Promise<void>;
+  deleteApiKey(keyType: string): Promise<void>;
   getPromptDefaults(): Promise<Record<string, unknown>>;
-  reindexDocuments(): Promise<Record<string, unknown>>;
-  clearAllDocuments(): Promise<{ status: string; message?: string }>;
-  getCourts(): Promise<{ courts: Array<{ id: string; name: string; jurisdiction?: string }> }>;
+  reindexDocuments(): Promise<ReindexResult>;
 
   // Admin Integrations (admin-only)
   getCourtListenerStatus(): Promise<CourtListenerStatus>;
@@ -896,6 +967,16 @@ export interface ApiClient {
   getRolePermissions(): Promise<RolePermissionsMatrix>;
   updateRolePermissions(role: string, permissions: string[]): Promise<RolePermissionsMatrix>;
   resetRolePermissions(): Promise<RolePermissionsMatrix>;
+  setUserActive(userId: string, isActive: boolean): Promise<AdminUser>;
+  deleteUser(userId: string): Promise<unknown>;
+  exportUserData(userId: string): Promise<Record<string, unknown>>;
+  forceSignOutUser(userId: string): Promise<unknown>;
+  resetUserMfa(userId: string): Promise<unknown>;
+
+  // Audit trail (admin-only)
+  getAuditLogs(query?: AuditLogQuery): Promise<{ logs: AuditLogEntry[]; count: number }>;
+  verifyAuditChain(query?: Pick<AuditLogQuery, 'startDate' | 'endDate'>): Promise<AuditVerifyResult>;
+  exportAuditLogs(query?: AuditLogQuery): Promise<Blob>;
 
   // Documents
   /** `metadata` is ignored — the server derives filename and type from the upload. */
@@ -913,7 +994,8 @@ export interface ApiClient {
   getConnectors(): Promise<ConnectorDataResponse>;
   connectConnector(connectorId: string): Promise<ConnectorAuthUrl>;
   disconnectConnector(connectorId: string): Promise<MessageResponse>;
-  syncConnector(connectorId: string, options?: Record<string, unknown>): Promise<SyncStartResult>;
+  /** The server refuses a sync with no scope: pass a folder, or ask for the whole account explicitly. */
+  syncConnector(connectorId: string, scope: { folder_id: string } | { sync_all: true }): Promise<SyncStartResult>;
   getConnectorSyncStatus(connectorId: string, syncId: string): Promise<SyncStatusResult>;
   getConnectorStatus(connectorId: string): Promise<ConnectorStatusResponse>;
 
@@ -930,12 +1012,15 @@ export interface ApiClient {
   getAuthorityMapJob(jobId: string): Promise<AuthorityMapJob>;
   getChatAuthorityMapJob(jobId: string): Promise<AuthorityMapChatJob>;
   getCaseOpinion(opinionId: string): Promise<{ case_name?: string; opinion_text?: string; syllabus?: string; [k: string]: unknown }>;
+  /** Delete a stored authority-map run and its mappings (owner only). */
+  deleteAuthorityMap(runId: string): Promise<{ status: string; id: string }>;
 
   // Contract Analysis
-  analyzeContract(payload: ContractAnalyzePayload): Promise<{ job_id: string; poll_url?: string }>;
   getContractJob(jobId: string): Promise<ContractAnalysisJob>;
   listContractAnalyses(): Promise<{ analyses: ContractAnalysisListItem[] }>;
   getContractAnalysis(id: string): Promise<ContractAnalysisResult>;
+  /** Delete a stored analysis and everything derived from it (owner only). */
+  deleteContractAnalysis(id: string): Promise<{ status: string; id: string }>;
   exportContractAnalysis(id: string, format: 'docx' | 'md'): Promise<Blob>;
   contractChat(documentId: string | null, message: string, mode?: string, draftText?: string, referenceIds?: string[]): Promise<ContractChatResponse>;
   generatePracticeProfile(practiceArea: string): Promise<{ practice_area: string; profile: string }>;
@@ -947,6 +1032,4 @@ export interface ApiClient {
   /** Render a chat transcript as Word / PDF / Markdown (POST /chat/export). */
   exportConversation(payload: ConversationExportPayload): Promise<Blob>;
 
-  // Comparison
-  compareCaseToDocuments(caseId: string, caseName: string, caseCitation: string, caseText: string, documentFilter?: Record<string, unknown> | string | null): Promise<CaseComparisonResponse>;
 }

@@ -22,7 +22,6 @@ function defaultProps(overrides: Record<string, any> = {}) {
     llmModel: 'gpt-5.5',
     temperature: 0.1,
     maxTokens: 4096,
-    batchSize: 100,
   };
   return {
     local,
@@ -40,8 +39,8 @@ describe('AdvancedTab', () => {
 
   it('shows all toggle options', () => {
     const { container } = render(<AdvancedTab {...defaultProps()} />);
-    expect(container.textContent).toContain('Enable Reranking');
-    expect(container.textContent).toContain('Hybrid Search');
+    expect(container.textContent).toContain('Cross-Encoder Reranking');
+    expect(container.textContent).toContain('Keyword Rescoring (BM25)');
     expect(container.textContent).toContain('Citation Verification');
     expect(container.textContent).toContain('Context Compression');
     expect(container.textContent).toContain('Query Expansion');
@@ -57,7 +56,9 @@ describe('AdvancedTab', () => {
 
   it('shows descriptions for each toggle', () => {
     const { container } = render(<AdvancedTab {...defaultProps()} />);
-    expect(container.textContent).toContain('Use cross-encoder to rerank retrieved results');
-    expect(container.textContent).toContain('Combine semantic and keyword search (BM25)');
+    // The copy states the real conditions rather than promising a reranker
+    // or a separate keyword search.
+    expect(container.textContent).toContain('only when the server has the optional sentence-transformers package');
+    expect(container.textContent).toContain('Blend keyword-match scores');
   });
 });

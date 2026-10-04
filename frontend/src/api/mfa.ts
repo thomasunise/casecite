@@ -17,10 +17,12 @@ Object.assign(api, {
     });
   },
 
-  async disableMfa(code: string): Promise<{ status: string }> {
+  async disableMfa(code: string, password: string): Promise<{ status: string }> {
     return api.request('/auth/mfa/disable', {
       method: 'POST',
-      body: JSON.stringify({ code }),
+      // The password is required for accounts that have one, so a hijacked
+      // session alone cannot remove the second factor.
+      body: JSON.stringify({ code, ...(password ? { password } : {}) }),
     });
   },
 

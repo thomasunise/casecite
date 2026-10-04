@@ -263,3 +263,104 @@ class TestIdentityService:
             "tenant_id": "t",
         }
         assert "roles" not in identity
+
+
+async def _seed_local_coro(uid: str, email: str, **fields) -> None:
+    async with AsyncSessionLocal() as session:
+        session.add(
+            DBUser(
+                id=uid,
+                email=email,
+                name="Local Account",
+                roles=fields.pop("roles", ["attorney"]),
+                email_verified=True,
+                is_active=True,
+                **fields,
+            )
+        )
+        await session.commit()
+
+
+async def _row_coro(uid: str) -> DBUser | None:
+    async with AsyncSessionLocal() as session:
+        return await session.get(DBUser, uid)
+
+
+class TestEmailLinking:
+    """The token's email claim is mutable and unverified: it may attach an SSO
+    identity to an unused invite, never to an account that is in local use."""
+
+    def _seed(self, client, db, **fields) -> tuple[str, str]:
+        uid = _uid("local")
+        email = f"{uid}@firm.example"
+        db.track(uid)
+        client.portal.call(lambda: _seed_local_coro(uid, email, **fields))
+        return uid, email
+
+    def test_account_with_a_used_password_is_not_taken_over(self, client, sso, db):
+        uid, email = self._seed(client, db, password_hash="pbkdf2$not-a-real-hash")
+        attacker_oid = _uid("oid")
+        db.track(attacker_oid)
+
+        resp = sso(_identity(attacker_oid, email))
+        assert resp.status_code == 403
+        row = client.portal.call(_row_coro, uid)
+        assert row.azure_oid is None
+        assert row.password_hash == "pbkdf2$not-a-real-hash"
+        assert db.roles(attacker_oid) is None
+
+    def test_admin_account_is_never_linked_by_email(self, client, sso, db):
+        uid, email = self._seed(client, db, roles=["admin"], password_hash=None)
+        attacker_oid = _uid("oid")
+        db.track(attacker_oid)
+
+        assert sso(_identity(attacker_oid, email)).status_code == 403
+        assert client.portal.call(_row_coro, uid).azure_oid is None
+
+    def test_mfa_protected_account_is_never_linked_by_email(self, client, sso, db):
+        uid, email = self._seed(client, db, password_hash=None, mfa_enabled=True)
+        attacker_oid = _uid("oid")
+        db.track(attacker_oid)
+
+        assert sso(_identity(attacker_oid, email)).status_code == 403
+        assert client.portal.call(_row_coro, uid).azure_oid is None
+
+    def test_unused_invite_is_linked_and_becomes_sso_only(self, client, sso, db):
+        """An admin invite (temporary password never used) attaches on first SSO
+        login; the temporary password the admin saw stops working."""
+        uid, email = self._seed(client, db, password_hash="pbkdf2$temp", must_change_password=True)
+        oid = _uid("oid")
+        db.track(oid)
+
+        resp = sso(_identity(oid, email))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["user"]["id"] == uid
+        row = client.portal.call(_row_coro, uid)
+        assert row.azure_oid == oid
+        assert row.password_hash is None
+        assert row.must_change_password is False
+
+    def test_linked_account_matches_on_oid_even_if_email_changes(self, client, sso, db):
+        uid, email = self._seed(client, db, password_hash=None)
+        oid = _uid("oid")
+        db.track(oid)
+        assert sso(_identity(oid, email)).status_code == 200
+
+        resp = sso(_identity(oid, "renamed@firm.example"))
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["user"]["id"] == uid
+
+    def test_another_identity_cannot_reuse_a_linked_email(self, client, sso, db):
+        uid, email = self._seed(client, db, password_hash=None)
+        first_oid, second_oid = _uid("oid"), _uid("oid")
+        db.track(first_oid, second_oid)
+        assert sso(_identity(first_oid, email)).status_code == 200
+
+        assert sso(_identity(second_oid, email)).status_code == 403
+        assert client.portal.call(_row_coro, uid).azure_oid == first_oid
+
+    def test_auto_provisioned_user_stores_the_oid(self, client, sso, db):
+        uid = _uid("sso-new")
+        db.track(uid)
+        assert sso(_identity(uid, f"{uid}@firm.example")).status_code == 200
+        assert client.portal.call(_row_coro, uid).azure_oid == uid

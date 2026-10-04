@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { api } from '../api';
 import logger from '../utils/logger';
+import { loadScript } from '../utils/loadScript';
+import { isAllowedOAuthUrl } from '../utils/oauthOrigins';
 import { useUIStore } from './uiStore';
 import { useDocumentsStore } from './documentsStore';
 import { useConnectorsStore } from './connectorsStore';
@@ -25,6 +27,34 @@ export interface PickerState {
 }
 
 const BOX_ELEMENTS_VERSION = '22.0.0';
+
+// Google's two picker dependencies. Loaded on demand, the first time someone
+// opens the Google picker — never on page load — so an instance that doesn't
+// use Google Drive makes no request to Google at all.
+const GOOGLE_IDENTITY_SRC = 'https://accounts.google.com/gsi/client';
+const GOOGLE_API_SRC = 'https://apis.google.com/js/api.js';
+
+// Microsoft's fixed tenant id for personal (consumer) Microsoft accounts.
+const MSA_CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
+const ONEDRIVE_CONSUMER_ORIGIN = 'https://onedrive.live.com';
+const SHAREPOINT_ORIGIN = /^https:\/\/[a-z0-9-]+\.sharepoint\.(com|us|de|cn)$/i;
+
+/**
+ * Origin of the signed-in user's OneDrive for Business / SharePoint site.
+ * It is `https://<tenant-name>-my.sharepoint.com`, where the tenant *name*
+ * cannot be derived from the tenant GUID — ask Graph where the drive lives.
+ */
+async function resolveBusinessOneDriveOrigin(graphAccessToken: string): Promise<string> {
+  const resp = await fetch('https://graph.microsoft.com/v1.0/me/drive?$select=webUrl', {
+    headers: { Authorization: `Bearer ${graphAccessToken}` },
+  });
+  if (!resp.ok) throw new Error(`Could not locate your OneDrive (Graph returned ${resp.status}).`);
+  const { webUrl } = await resp.json() as { webUrl?: string };
+  if (!webUrl) throw new Error('Could not locate your OneDrive.');
+  const origin = new URL(webUrl).origin;
+  if (!SHAREPOINT_ORIGIN.test(origin)) throw new Error('Unexpected OneDrive location.');
+  return origin;
+}
 
 export const usePickerStore = create<PickerState>((set, get) => ({
   showPickerModal: false,
@@ -66,18 +96,21 @@ export const usePickerStore = create<PickerState>((set, get) => ({
     }
   },
 
-  loadGooglePicker: () => {
-    return new Promise<void>((resolve) => {
-      if (window.google?.picker) {
-        resolve();
+  loadGooglePicker: async () => {
+    if (window.google?.picker && window.google.accounts?.oauth2) return;
+    await Promise.all([loadScript(GOOGLE_IDENTITY_SRC), loadScript(GOOGLE_API_SRC)]);
+    if (window.google?.picker) return;
+    await new Promise<void>((resolve, reject) => {
+      if (!window.gapi) {
+        reject(new Error('Google API failed to initialize.'));
         return;
       }
-      const script = document.createElement('script');
-      script.src = 'https://apis.google.com/js/api.js';
-      script.onload = () => {
-        window.gapi?.load('picker', () => resolve());
-      };
-      document.body.appendChild(script);
+      window.gapi.load('picker', {
+        callback: () => resolve(),
+        onerror: () => reject(new Error('Google Picker failed to load.')),
+        timeout: 15000,
+        ontimeout: () => reject(new Error('Google Picker timed out while loading.')),
+      });
     });
   },
 
@@ -182,11 +215,21 @@ export const usePickerStore = create<PickerState>((set, get) => ({
         commands: { pick: { select: { urls: { download: true } } } },
       };
 
-      const baseUrl = tokenResponse.account?.environment === 'login.windows.net'
-        ? 'https://onedrive.live.com'
-        : `https://${tokenResponse.account?.tenantId ? tokenResponse.account.tenantId + '-my.sharepoint.com' : 'onedrive.live.com'}`;
+      // Personal accounts all live in Microsoft's fixed consumer tenant; work
+      // and school accounts use their organisation's SharePoint host.
+      // (`account.environment` is the login authority host — the same value
+      // for both kinds — so it cannot tell them apart.)
+      const isConsumer = tokenResponse.account?.tenantId === MSA_CONSUMER_TENANT_ID;
+      const baseUrl = isConsumer
+        ? ONEDRIVE_CONSUMER_ORIGIN
+        : await resolveBusinessOneDriveOrigin(tokenResponse.accessToken);
 
-      const pickerUrl = `${baseUrl}/_layouts/15/FilePicker.aspx`;
+      // Microsoft's File Picker v8 contract: the options travel in the
+      // `filePicker` query parameter and the token in the POST body.
+      const pickerQuery = new URLSearchParams({ filePicker: JSON.stringify(pickerParams), locale: 'en-us' });
+      const pickerUrl = isConsumer
+        ? `${baseUrl}/picker?${pickerQuery}`
+        : `${baseUrl}/_layouts/15/FilePicker.aspx?${pickerQuery}`;
       pickerWindow = window.open('', 'OneDrivePicker', 'width=1080,height=680,popup=1');
       if (!pickerWindow) {
         addToast('Popup blocked — please allow popups for this site', 'error');
@@ -204,7 +247,6 @@ export const usePickerStore = create<PickerState>((set, get) => ({
         form.appendChild(input);
       };
       addField('access_token', tokenResponse.accessToken);
-      addField('picker', JSON.stringify(pickerParams));
 
       pickerWindow.document.body.appendChild(form);
       form.submit();
@@ -286,13 +328,12 @@ export const usePickerStore = create<PickerState>((set, get) => ({
     set({ pickerLoading: true });
     try {
       if (!window.Dropbox) {
-        const script = document.createElement('script');
-        script.src = 'https://www.dropbox.com/static/api/2/dropins.js';
-        script.id = 'dropboxjs';
-        script.setAttribute('data-app-key', pickerConfig.dropbox_app_key || '');
-        document.body.appendChild(script);
-        await new Promise(resolve => script.onload = resolve);
+        await loadScript('https://www.dropbox.com/static/api/2/dropins.js', {
+          id: 'dropboxjs',
+          attributes: { 'data-app-key': pickerConfig.dropbox_app_key || '' },
+        });
       }
+      if (!window.Dropbox) throw new Error('Dropbox Chooser failed to initialize.');
 
       window.Dropbox!.choose({
         success: async (files: Array<Record<string, unknown>>) => {
@@ -340,7 +381,9 @@ export const usePickerStore = create<PickerState>((set, get) => ({
         const msg = tokenError instanceof Error ? tokenError.message : String(tokenError);
         if (msg.toLowerCase().includes('not connected')) {
           const authResp = await api.connectConnector('box');
-          if (authResp?.auth_url) {
+          // Same guard as every other connector: only ever open a
+          // backend-supplied URL that points at the provider itself.
+          if (isAllowedOAuthUrl(authResp?.auth_url)) {
             window.open(authResp.auth_url, 'BoxAuth', 'width=600,height=700,popup=1');
             addToast('Sign in to Box in the popup, then click Browse again.', 'info');
           } else {
@@ -361,13 +404,8 @@ export const usePickerStore = create<PickerState>((set, get) => ({
           link.href = `${base}/picker.css`;
           document.head.appendChild(link);
         }
-        const script = document.createElement('script');
-        script.src = `${base}/picker.js`;
-        document.body.appendChild(script);
-        await new Promise((resolve, reject) => {
-          script.onload = resolve;
-          script.onerror = () => reject(new Error('Failed to load Box picker script'));
-        });
+        await loadScript(`${base}/picker.js`);
+        if (!window.Box?.FilePicker) throw new Error('Box picker failed to initialize.');
       }
 
       // Box UI Elements render into a container, so give the picker a

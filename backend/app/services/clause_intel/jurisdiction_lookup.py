@@ -26,6 +26,8 @@ class JurisdictionFlag:
     constraints: dict
     authorities: list[dict]
     recommended_text: str | None
+    # When the rule was compiled; None for rules that predate the stamp.
+    as_of: str | None = None
 
 
 _SEVERITY_BY_ENFORCEABILITY = {
@@ -89,6 +91,7 @@ async def evaluate(
                 constraints=rule.get("constraints") or {},
                 authorities=rule.get("authorities") or [],
                 recommended_text=rule.get("recommended_text"),
+                as_of=(rule.get("constraints") or {}).get("as_of"),
             )
         )
     return flags

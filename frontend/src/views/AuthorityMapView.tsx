@@ -3,7 +3,7 @@ import { useAuthorityMapStore } from '../stores/authorityMapStore';
 import { useResearch } from '../contexts/ResearchContext';
 import { Icon, AnnotatedDocument, ContractFilePicker, PdfDocumentViewer } from '../components';
 import type { AuthorityMapping } from '../api/types';
-import { mappingToCitation } from '../utils';
+import { mappingToCitation, authorityMapCoverageNote } from '../utils';
 import s from './AuthorityMapView.module.css';
 
 function AuthorityMapView() {
@@ -11,7 +11,7 @@ function AuthorityMapView() {
     docText, docName, fileUrl, fileType, jurisdiction,
     filePickerOpen, fileLoading, status, error, result, annotations,
     setJurisdiction,
-    openFilePicker, closeFilePicker, loadUploadedFile, loadIndexedDocument, clearDocument, run,
+    openFilePicker, closeFilePicker, loadUploadedFile, loadIndexedDocument, clearDocument, run, deleteResult,
   } = useAuthorityMapStore();
   const { setSelectedCitation } = useResearch();
   const verify = (m: AuthorityMapping, i = 0) => setSelectedCitation(mappingToCitation(m, i));
@@ -22,6 +22,7 @@ function AuthorityMapView() {
   const hasDoc = !!docText.trim();
   const isPdf = fileType === 'pdf' && !!fileUrl;
   const effectiveMode = isPdf ? viewMode : 'text';
+  const coverageNote = authorityMapCoverageNote(result?.summary.coverage);
 
   return (
     <div className={s.view}>
@@ -92,6 +93,17 @@ function AuthorityMapView() {
               {isPdf && effectiveMode === 'document' && <span className={s.statMuted}>Switch to “Text + highlights” to see citations inline</span>}
             </>
           )}
+          <span className={s.spacer} />
+          {result.run_id && (
+            <button className={s.deleteBtn} onClick={deleteResult}>
+              <Icon name="Trash2" size={12} /> Delete this map
+            </button>
+          )}
+        </div>
+      )}
+      {result && coverageNote && (
+        <div className={s.statusStrip} role="note">
+          <Icon name="AlertCircle" size={14} className={s.statMuted} /> {coverageNote}
         </div>
       )}
 

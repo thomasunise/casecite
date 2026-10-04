@@ -14,13 +14,11 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from app.models.enums import DocumentStatus
 from app.models.schemas import ConnectorType, Document
 from app.services.documents import DocumentService
 from app.services.rag.search import search_documents
 from app.services.vectordb import _has_tenant_scope
-
 
 # ---------------------------------------------------------------------------
 # The fail-closed tenant-scope guard

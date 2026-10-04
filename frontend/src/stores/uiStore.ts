@@ -63,6 +63,10 @@ export interface UIState {
   // UI visibility
   showSettings: boolean;
   setShowSettings: (val: boolean) => void;
+  /** Tab the Settings modal opens on (null = its default). */
+  settingsTab: string | null;
+  /** Open Settings, optionally straight onto a given tab. */
+  openSettings: (tab?: string) => void;
   showShortcutsHelp: boolean;
   setShowShortcutsHelp: (val: boolean | ((prev: boolean) => boolean)) => void;
   rightPanelTab: string;
@@ -77,9 +81,6 @@ export interface UIState {
   setLeftSidebarOpen: (val: boolean) => void;
   rightPanelOpen: boolean;
   setRightPanelOpen: (val: boolean) => void;
-  // Preview modal
-  previewModal: { show: boolean; title: string; content: string };
-  setPreviewModal: (val: { show: boolean; title: string; content: string }) => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -132,7 +133,9 @@ export const useUIStore = create<UIState>((set, get) => ({
 
   // UI visibility state
   showSettings: false,
-  setShowSettings: (val) => set({ showSettings: val }),
+  setShowSettings: (val) => set(val ? { showSettings: true } : { showSettings: false, settingsTab: null }),
+  settingsTab: null,
+  openSettings: (tab) => set({ showSettings: true, settingsTab: tab ?? null }),
   showShortcutsHelp: false,
   setShowShortcutsHelp: (val) => set((state) => ({
     showShortcutsHelp: typeof val === 'function' ? val(state.showShortcutsHelp) : val,
@@ -151,7 +154,4 @@ export const useUIStore = create<UIState>((set, get) => ({
   setLeftSidebarOpen: (val) => set({ leftSidebarOpen: val }),
   rightPanelOpen: false,
   setRightPanelOpen: (val) => set({ rightPanelOpen: val }),
-  // Preview modal
-  previewModal: { show: false, title: '', content: '' },
-  setPreviewModal: (val) => set({ previewModal: val }),
 }));

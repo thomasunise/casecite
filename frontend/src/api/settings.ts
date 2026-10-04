@@ -1,5 +1,5 @@
 import { api } from './client';
-import type { RAGSettings } from './types';
+import type { RAGSettings, ReindexResult } from './types';
 
 Object.assign(api, {
   async getSettings(): Promise<RAGSettings> {
@@ -28,19 +28,15 @@ Object.assign(api, {
     });
   },
 
+  async deleteApiKey(keyType: string): Promise<void> {
+    return api.request(`/user/keys/${encodeURIComponent(keyType)}`, { method: 'DELETE' });
+  },
+
   async getPromptDefaults(): Promise<Record<string, unknown>> {
     return api.request('/settings/prompts/defaults');
   },
 
-  async reindexDocuments(): Promise<Record<string, unknown>> {
+  async reindexDocuments(): Promise<ReindexResult> {
     return api.request('/settings/reindex', { method: 'POST' });
-  },
-
-  async clearAllDocuments(): Promise<{ status: string; message?: string }> {
-    return api.request('/settings/clear', { method: 'POST' });
-  },
-
-  async getCourts(): Promise<{ courts: Array<{ id: string; name: string; jurisdiction?: string }> }> {
-    return api.request('/legal-docs/courts');
   },
 });

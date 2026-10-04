@@ -13,16 +13,17 @@ Supported Pickers:
 """
 
 import logging
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.config import settings
 from app.models.schemas import (
     BoxPickerFile,
     BoxPickerTokenResponse,
     ConnectorType,
+    DocumentStatus,
     DropboxChooserFile,
     GooglePickerFile,
     OneDrivePickerFile,
@@ -34,6 +35,7 @@ from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData, get_current_user
 from app.services.documents import document_service
 from app.services.permissions import require_permission
+from app.services.user_keys import UserAPIKeys
 from app.utils.ip_resolution import get_client_ip
 from app.utils.safe_fetch import UnsafeURLError, safe_download
 from app.utils.upload_validation import validate_import_file
@@ -137,7 +139,6 @@ async def get_box_picker_token(
 @router.post("/google/import")
 async def import_from_google_picker(
     files: list[GooglePickerFile],
-    background_tasks: BackgroundTasks,
     request: Request,
     current_user: TokenData = require_permission("documents.upload"),
 ) -> PickerImportResponse:
@@ -150,6 +151,9 @@ async def import_from_google_picker(
     imported = 0
     failed = 0
     errors = []
+    document_ids: list[str] = []
+    # BYOK: embed with the user's own keys (headers, else their stored keys).
+    user_keys = UserAPIKeys.from_request(request, user_id=current_user.user_id)
 
     for file in files:
         try:
@@ -161,11 +165,13 @@ async def import_from_google_picker(
             }
 
             headers = {"Authorization": f"Bearer {file.oauthToken}"}
+            # file.id comes from the browser; encode it so it stays one path segment.
+            file_path = quote(file.id, safe="")
 
             if file.mimeType in export_mimes:
                 # Export Google Docs format to Office format
                 query = urlencode({"mimeType": export_mimes[file.mimeType]})
-                url = f"https://www.googleapis.com/drive/v3/files/{file.id}/export?{query}"
+                url = f"https://www.googleapis.com/drive/v3/files/{file_path}/export?{query}"
 
                 # Adjust filename extension
                 ext_map = {
@@ -179,7 +185,7 @@ async def import_from_google_picker(
                 content_type = export_mimes[file.mimeType]
             else:
                 # Direct download
-                url = f"https://www.googleapis.com/drive/v3/files/{file.id}?{urlencode({'alt': 'media'})}"
+                url = f"https://www.googleapis.com/drive/v3/files/{file_path}?{urlencode({'alt': 'media'})}"
                 filename = file.name
                 content_type = file.mimeType
 
@@ -194,7 +200,7 @@ async def import_from_google_picker(
             filename, content_type = validate_import_file(content, content_type, filename)
 
             # Index the document
-            await document_service.upload_and_index(
+            doc = await document_service.upload_and_index(
                 file_content=content,
                 filename=filename,
                 content_type=content_type,
@@ -202,7 +208,15 @@ async def import_from_google_picker(
                 source=ConnectorType.GOOGLE_PICKER,
                 source_id=file.id,
                 metadata={"original_url": file.url},
+                user_keys=user_keys,
             )
+            if doc.status == DocumentStatus.FAILED:
+                # Stored but not searchable (e.g. no embedding key): say so.
+                reason = doc.metadata.get("error") or "could not be indexed"
+                errors.append(f"{file.name}: {reason}")
+                failed += 1
+                continue
+            document_ids.append(doc.id)
             imported += 1
 
         except UnsafeURLError as e:
@@ -222,7 +236,12 @@ async def import_from_google_picker(
         resource_type="picker_import",
         resource_id="google_picker",
         ip_address=get_client_ip(request),
-        details={"imported": imported, "failed": failed, "provider": "google_picker"},
+        details={
+            "imported": imported,
+            "failed": failed,
+            "provider": "google_picker",
+            "document_ids": document_ids,
+        },
     )
 
     return PickerImportResponse(imported=imported, failed=failed, errors=errors)
@@ -236,7 +255,6 @@ async def import_from_google_picker(
 @router.post("/microsoft/import")
 async def import_from_onedrive_picker(
     files: list[OneDrivePickerFile],
-    background_tasks: BackgroundTasks,
     request: Request,
     current_user: TokenData = require_permission("documents.upload"),
 ) -> PickerImportResponse:
@@ -249,6 +267,9 @@ async def import_from_onedrive_picker(
     imported = 0
     failed = 0
     errors = []
+    document_ids: list[str] = []
+    # BYOK: embed with the user's own keys (headers, else their stored keys).
+    user_keys = UserAPIKeys.from_request(request, user_id=current_user.user_id)
 
     for file in files:
         try:
@@ -258,9 +279,15 @@ async def import_from_onedrive_picker(
                 url = file.downloadUrl
             elif file.driveId:
                 # SharePoint/shared drive file — use driveId-based path
-                url = f"https://graph.microsoft.com/v1.0/drives/{file.driveId}/items/{file.id}/content"
+                url = (
+                    "https://graph.microsoft.com/v1.0/drives/"
+                    f"{quote(file.driveId, safe='!')}/items/{quote(file.id, safe='!')}/content"
+                )
             else:
-                url = f"https://graph.microsoft.com/v1.0/me/drive/items/{file.id}/content"
+                url = (
+                    "https://graph.microsoft.com/v1.0/me/drive/items/"
+                    f"{quote(file.id, safe='!')}/content"
+                )
 
             content = await safe_download(
                 url,
@@ -276,7 +303,7 @@ async def import_from_onedrive_picker(
             safe_name, content_type = validate_import_file(content, content_type, file.name)
 
             # Index the document
-            await document_service.upload_and_index(
+            doc = await document_service.upload_and_index(
                 file_content=content,
                 filename=safe_name,
                 content_type=content_type,
@@ -284,7 +311,15 @@ async def import_from_onedrive_picker(
                 source=ConnectorType.ONEDRIVE_PICKER,
                 source_id=file.id,
                 metadata={"web_url": file.webUrl},
+                user_keys=user_keys,
             )
+            if doc.status == DocumentStatus.FAILED:
+                # Stored but not searchable (e.g. no embedding key): say so.
+                reason = doc.metadata.get("error") or "could not be indexed"
+                errors.append(f"{file.name}: {reason}")
+                failed += 1
+                continue
+            document_ids.append(doc.id)
             imported += 1
 
         except UnsafeURLError as e:
@@ -304,7 +339,12 @@ async def import_from_onedrive_picker(
         resource_type="picker_import",
         resource_id="onedrive_picker",
         ip_address=get_client_ip(request),
-        details={"imported": imported, "failed": failed, "provider": "onedrive_picker"},
+        details={
+            "imported": imported,
+            "failed": failed,
+            "provider": "onedrive_picker",
+            "document_ids": document_ids,
+        },
     )
 
     return PickerImportResponse(imported=imported, failed=failed, errors=errors)
@@ -318,7 +358,6 @@ async def import_from_onedrive_picker(
 @router.post("/box/import")
 async def import_from_box_picker(
     files: list[BoxPickerFile],
-    background_tasks: BackgroundTasks,
     request: Request,
     current_user: TokenData = require_permission("documents.upload"),
 ) -> PickerImportResponse:
@@ -328,10 +367,13 @@ async def import_from_box_picker(
     imported = 0
     failed = 0
     errors = []
+    document_ids: list[str] = []
+    # BYOK: embed with the user's own keys (headers, else their stored keys).
+    user_keys = UserAPIKeys.from_request(request, user_id=current_user.user_id)
 
     for file in files:
         try:
-            url = f"https://api.box.com/2.0/files/{file.id}/content"
+            url = f"https://api.box.com/2.0/files/{quote(file.id, safe='')}/content"
             headers = {"Authorization": f"Bearer {file.accessToken}"}
             content = await safe_download(
                 url,
@@ -345,7 +387,7 @@ async def import_from_box_picker(
             # Same allowlist + magic-byte validation as the direct upload route.
             safe_name, content_type = validate_import_file(content, content_type, file.name)
 
-            await document_service.upload_and_index(
+            doc = await document_service.upload_and_index(
                 file_content=content,
                 filename=safe_name,
                 content_type=content_type,
@@ -353,7 +395,15 @@ async def import_from_box_picker(
                 source=ConnectorType.BOX_PICKER,
                 source_id=file.id,
                 metadata={},
+                user_keys=user_keys,
             )
+            if doc.status == DocumentStatus.FAILED:
+                # Stored but not searchable (e.g. no embedding key): say so.
+                reason = doc.metadata.get("error") or "could not be indexed"
+                errors.append(f"{file.name}: {reason}")
+                failed += 1
+                continue
+            document_ids.append(doc.id)
             imported += 1
 
         except UnsafeURLError as e:
@@ -372,7 +422,12 @@ async def import_from_box_picker(
         resource_type="picker_import",
         resource_id="box_picker",
         ip_address=get_client_ip(request),
-        details={"imported": imported, "failed": failed, "provider": "box_picker"},
+        details={
+            "imported": imported,
+            "failed": failed,
+            "provider": "box_picker",
+            "document_ids": document_ids,
+        },
     )
 
     return PickerImportResponse(imported=imported, failed=failed, errors=errors)
@@ -386,7 +441,6 @@ async def import_from_box_picker(
 @router.post("/dropbox/import")
 async def import_from_dropbox_chooser(
     files: list[DropboxChooserFile],
-    background_tasks: BackgroundTasks,
     request: Request,
     current_user: TokenData = require_permission("documents.upload"),
 ) -> PickerImportResponse:
@@ -399,6 +453,9 @@ async def import_from_dropbox_chooser(
     imported = 0
     failed = 0
     errors = []
+    document_ids: list[str] = []
+    # BYOK: embed with the user's own keys (headers, else their stored keys).
+    user_keys = UserAPIKeys.from_request(request, user_id=current_user.user_id)
 
     for file in files:
         try:
@@ -414,7 +471,7 @@ async def import_from_dropbox_chooser(
             # Same allowlist + magic-byte validation as the direct upload route.
             safe_name, content_type = validate_import_file(content, content_type, file.name)
 
-            await document_service.upload_and_index(
+            doc = await document_service.upload_and_index(
                 file_content=content,
                 filename=safe_name,
                 content_type=content_type,
@@ -422,7 +479,15 @@ async def import_from_dropbox_chooser(
                 source=ConnectorType.DROPBOX_CHOOSER,
                 source_id=file.link,  # Use link as ID since Chooser doesn't provide file ID
                 metadata={},
+                user_keys=user_keys,
             )
+            if doc.status == DocumentStatus.FAILED:
+                # Stored but not searchable (e.g. no embedding key): say so.
+                reason = doc.metadata.get("error") or "could not be indexed"
+                errors.append(f"{file.name}: {reason}")
+                failed += 1
+                continue
+            document_ids.append(doc.id)
             imported += 1
 
         except UnsafeURLError as e:
@@ -441,7 +506,12 @@ async def import_from_dropbox_chooser(
         resource_type="picker_import",
         resource_id="dropbox_chooser",
         ip_address=get_client_ip(request),
-        details={"imported": imported, "failed": failed, "provider": "dropbox_chooser"},
+        details={
+            "imported": imported,
+            "failed": failed,
+            "provider": "dropbox_chooser",
+            "document_ids": document_ids,
+        },
     )
 
     return PickerImportResponse(imported=imported, failed=failed, errors=errors)

@@ -15,13 +15,14 @@ import asyncio
 import html as html_lib
 import logging
 import re
-from datetime import date, datetime
+from datetime import date
 from enum import Enum
 
 import httpx
 from pydantic import BaseModel
 
 from app.config import settings
+from app.services.courtlistener_client import CourtListenerClientBase
 from app.services.courtlistener_gate import cl_client
 
 logger = logging.getLogger(__name__)
@@ -129,7 +130,30 @@ class CitationValidation(BaseModel):
     analysis_basis: str = ""
 
 
-class CourtListenerService:
+class CitingLookupError(RuntimeError):
+    """The opinions citing a case could not be looked up reliably."""
+
+
+# Words that carry no identity in a case name ("Roe v. Wade" → {roe, wade}).
+_NAME_STOPWORDS = frozenset(
+    {
+        "v", "vs", "the", "of", "and", "in", "re", "ex", "parte", "rel", "et", "al",
+        "matter", "inc", "llc", "llp", "corp", "co", "ltd",
+    }
+)  # fmt: skip
+
+
+def _name_tokens(name: str) -> set[str]:
+    return {
+        t for t in re.findall(r"[a-z0-9]+", name.lower()) if len(t) > 1 and t not in _NAME_STOPWORDS
+    }
+
+
+def _normalize_citation(cite: str) -> str:
+    return re.sub(r"[\s.]", "", cite).lower()
+
+
+class CourtListenerService(CourtListenerClientBase):
     """
     Integration with CourtListener API for legal research.
 
@@ -138,41 +162,8 @@ class CourtListenerService:
     - Consider RECAP archive for bulk data
     """
 
-    BASE_URL = "https://www.courtlistener.com/api/rest/v4"
-
     def __init__(self):
-        token = getattr(settings, "courtlistener_api_token", None)
-        # Treat empty string as None
-        self.api_token = token if token and token.strip() else None
-        self.headers = {
-            "Accept": "application/json",
-        }
-        if self.api_token:
-            self.headers["Authorization"] = f"Token {self.api_token}"
-
-    def set_token(self, token: str | None) -> None:
-        """Update the active CourtListener token at runtime.
-
-        Used by the admin integrations endpoint and at startup so the
-        instance-wide token (DB) can override the .env fallback without a
-        restart. Passing a falsy token reverts to anonymous (lower rate limit).
-        """
-        self.api_token = token if token and token.strip() else None
-        self.headers = {"Accept": "application/json"}
-        if self.api_token:
-            self.headers["Authorization"] = f"Token {self.api_token}"
-
-    def _check_token(self):
-        """Raise error if no API token configured."""
-        if not self.api_token:
-            raise ValueError(
-                "CourtListener API token required. "
-                "Get a FREE token at https://www.courtlistener.com/help/api/rest/#permissions "
-                "(1) Create account at courtlistener.com, "
-                "(2) Go to Profile > API section, "
-                "(3) Create token and add COURTLISTENER_API_TOKEN=your_token to .env file, "
-                "(4) Restart the backend server."
-            )
+        self.set_token(getattr(settings, "courtlistener_api_token", None))
 
     async def search_opinions(
         self,
@@ -331,25 +322,6 @@ class CourtListenerService:
             html=data.get("html_with_citations"),
         )
 
-    async def get_opinion_by_citation(self, citation: str) -> Opinion | None:
-        """
-        Look up a case by its citation.
-
-        Args:
-            citation: e.g., "410 U.S. 113" or "Brown v. Board of Education"
-        """
-        # Search for the citation
-        results = await self.search_opinions(
-            query=f'citation:"{citation}"' if self._looks_like_citation(citation) else citation,
-            limit=5,
-        )
-
-        if results:
-            # Get full opinion for first result
-            return await self.get_opinion(results[0].id)
-
-        return None
-
     async def get_citing_opinions(
         self,
         cluster_id: int,
@@ -357,6 +329,7 @@ class CourtListenerService:
         citation: str | None = None,
         case_name: str | None = None,
         order_by: str = "dateFiled desc",
+        opinion_ids: list[int] | None = None,
     ) -> list[CitingOpinion]:
         """
         Cases that cite a given opinion cluster, with the passage around the
@@ -368,24 +341,32 @@ class CourtListenerService:
         court tends to sit); the same query ANDed with the citation string
         (highlight=on) returns a snippet centred on the cite — that passage,
         not the opinion's opening lines, is what the treatment scan reads.
+
+        ``cites:`` keys on OPINION ids. Pass ``opinion_ids`` when the caller
+        already has them (search results carry them); otherwise they are read
+        from the cluster. If neither yields an id this raises
+        ``CitingLookupError`` — a cluster id is a different id space, and
+        searching with it would scan whichever unrelated opinion shares the
+        number and report on the wrong case.
         """
-        opinion_ids: list[int] = []
+        opinion_ids = [int(i) for i in (opinion_ids or []) if i]
         async with cl_client(timeout=180.0) as client:
-            # Sub-opinion ids make ``cites:`` precise (it keys on opinion ids);
-            # the cluster endpoint needs a token, so fall back to the cluster id.
-            try:
-                cluster_resp = await client.get(
-                    f"{self.BASE_URL}/clusters/{cluster_id}/", headers=self.headers
-                )
-                if cluster_resp.status_code == 200:
-                    for sub in cluster_resp.json().get("sub_opinions") or []:
-                        m = re.search(r"/(\d+)/?$", str(sub))
-                        if m:
-                            opinion_ids.append(int(m.group(1)))
-            except (httpx.HTTPError, ValueError, KeyError) as e:
-                logger.debug(f"cluster lookup skipped for {cluster_id}: {e}")
             if not opinion_ids:
-                opinion_ids = [cluster_id]
+                try:
+                    cluster_resp = await client.get(
+                        f"{self.BASE_URL}/clusters/{cluster_id}/", headers=self.headers
+                    )
+                    if cluster_resp.status_code == 200:
+                        for sub in cluster_resp.json().get("sub_opinions") or []:
+                            m = re.search(r"/(\d+)/?$", str(sub))
+                            if m:
+                                opinion_ids.append(int(m.group(1)))
+                except (httpx.HTTPError, ValueError, KeyError) as e:
+                    logger.warning(f"cluster lookup failed for {cluster_id}: {e}")
+            if not opinion_ids:
+                raise CitingLookupError(
+                    f"could not resolve the opinions in CourtListener cluster {cluster_id}"
+                )
             cites_expr = "cites:(" + " OR ".join(str(i) for i in opinion_ids) + ")"
 
             results: list[dict] = []
@@ -554,6 +535,8 @@ class CourtListenerService:
         total_citations = 0
         absolute_url = None
         found_citations: list[str] = []
+        opinion_ids: list[int] = []
+        nearest: str | None = None
 
         async with cl_client(timeout=180.0) as client:
             # Search for the citation
@@ -569,8 +552,17 @@ class CourtListenerService:
             if response.status_code == 200:
                 data = response.json()
                 results = data.get("results", [])
-                if results:
-                    first_result = results[0]
+                # Search ranks by relevance: the first hit is not necessarily the
+                # case asked about. Take the first result that actually IS it.
+                first_result = next((r for r in results if self._result_matches(citation, r)), None)
+                if results and first_result is None:
+                    nearest = results[0].get("caseName")
+                if first_result is not None:
+                    opinion_ids = [
+                        o["id"]
+                        for o in first_result.get("opinions") or []
+                        if isinstance(o, dict) and o.get("id")
+                    ]
                     cluster_id = first_result.get("cluster_id") or first_result.get("id")
                     case_name = first_result.get("caseName", "Unknown")
                     case_name_short = first_result.get("caseNameShort") or None
@@ -583,16 +575,23 @@ class CourtListenerService:
                 response.raise_for_status()
 
         if not cluster_id:
+            not_found = (
+                "Citation not found in CourtListener database. Try a different format "
+                "(e.g., '410 U.S. 113' or 'Roe v. Wade')."
+            )
+            if nearest:
+                not_found = (
+                    "No case in CourtListener matched this citation exactly, so nothing was "
+                    f'checked. The closest search result was "{nearest}" — if that is the '
+                    "case you meant, search by its reporter citation (e.g., '410 U.S. 113')."
+                )
             return CitationValidation(
                 case_id=0,
                 case_name="Not Found",
                 citation=citation,
                 is_good_law=None,
                 warning_level="unknown",
-                notes=[
-                    "Citation not found in CourtListener database. Try a different format (e.g., '410 U.S. 113' or 'Roe v. Wade').",
-                    self._NOT_A_CITATOR,
-                ],
+                notes=[not_found, self._NOT_A_CITATOR],
                 analysis_basis="not_found",
             )
 
@@ -603,9 +602,28 @@ class CourtListenerService:
             else (found_citations[0] if found_citations else None)
         )
         name_term = case_name_short or (case_name if " v. " in case_name else None)
-        citing_opinions = await self._citing_opinions_recent_and_most_cited(
-            cluster_id, cite_term, name_term
-        )
+        try:
+            citing_opinions = await self._citing_opinions_recent_and_most_cited(
+                cluster_id, cite_term, name_term, opinion_ids
+            )
+        except CitingLookupError as e:
+            logger.warning(f"citation check could not run for cluster {cluster_id}: {e}")
+            return CitationValidation(
+                case_id=cluster_id,
+                case_name=case_name,
+                citation=citation,
+                absolute_url=absolute_url,
+                is_good_law=None,
+                warning_level="unknown",
+                total_citing_cases=total_citations,
+                notes=[
+                    self._NOT_A_CITATOR,
+                    "Could not verify: the opinions citing this case could not be looked up "
+                    "in CourtListener, so nothing was scanned. This is not a clean result — "
+                    "try again, or check the case in a citator.",
+                ],
+                analysis_basis="citing_lookup_failed",
+            )
 
         negative = [c for c in citing_opinions if c.treatment == CitationTreatment.NEGATIVE]
         caution = [c for c in citing_opinions if c.treatment == CitationTreatment.CAUTION]
@@ -698,8 +716,31 @@ class CourtListenerService:
             return "unknown", None
         return "none", True
 
+    def _result_matches(self, query: str, result: dict) -> bool:
+        """True when a search result is the case the query names.
+
+        A reporter citation must appear among the result's citations; a case
+        name must have every identifying word in the result's case name.
+        """
+        if self._looks_like_citation(query):
+            wanted = _normalize_citation(query)
+            for cite in result.get("citation") or []:
+                have = _normalize_citation(str(cite))
+                if have and (have in wanted or wanted in have):
+                    return True
+            return False
+        wanted_tokens = _name_tokens(query)
+        have_tokens = _name_tokens(
+            f"{result.get('caseName') or ''} {result.get('caseNameShort') or ''}"
+        )
+        return bool(wanted_tokens) and wanted_tokens <= have_tokens
+
     async def _citing_opinions_recent_and_most_cited(
-        self, cluster_id: int, cite_term: str | None, name_term: str | None
+        self,
+        cluster_id: int,
+        cite_term: str | None,
+        name_term: str | None,
+        opinion_ids: list[int] | None = None,
     ) -> list[CitingOpinion]:
         """The most recent citing opinions plus the most-cited ones, de-duplicated.
 
@@ -709,7 +750,11 @@ class CourtListenerService:
         CourtListener's search API can sort by.
         """
         recent = await self.get_citing_opinions(
-            cluster_id, limit=100, citation=cite_term, case_name=name_term
+            cluster_id,
+            limit=100,
+            citation=cite_term,
+            case_name=name_term,
+            opinion_ids=opinion_ids,
         )
         try:
             most_cited = await self.get_citing_opinions(
@@ -718,8 +763,9 @@ class CourtListenerService:
                 citation=cite_term,
                 case_name=name_term,
                 order_by="citeCount desc",
+                opinion_ids=opinion_ids,
             )
-        except (httpx.HTTPError, ValueError, KeyError) as e:
+        except (httpx.HTTPError, ValueError, KeyError, CitingLookupError) as e:
             logger.warning(f"most-cited citing search failed for {cluster_id}: {e}")
             most_cited = []
         seen: set[int] = set()
@@ -764,51 +810,11 @@ class CourtListenerService:
             cited_gt=5,  # Only well-cited cases
         )
 
-    def _parse_date(self, date_str: str | None) -> date | None:
-        """Parse date string from API."""
-        if not date_str:
-            return None
-        try:
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00")).date()
-        except (ValueError, AttributeError):
-            return None
-
     def _looks_like_citation(self, text: str) -> bool:
         """Check if text looks like a legal citation."""
-        import re
-
         # Matches patterns like "410 U.S. 113" or "123 F.3d 456"
         citation_pattern = r"\d+\s+[A-Za-z.]+\s*\d*[a-z]*\s+\d+"
         return bool(re.search(citation_pattern, text))
-
-    def _get_courts_for_jurisdiction(self, jurisdiction: str) -> list[str]:
-        """Map jurisdiction to CourtListener court IDs."""
-        jurisdiction_courts = {
-            "federal": [
-                "scotus",
-                "ca1",
-                "ca2",
-                "ca3",
-                "ca4",
-                "ca5",
-                "ca6",
-                "ca7",
-                "ca8",
-                "ca9",
-                "ca10",
-                "ca11",
-                "cadc",
-                "cafc",
-            ],
-            "scotus": ["scotus"],
-            "ninth_circuit": ["ca9"],
-            "second_circuit": ["ca2"],
-            "california": ["cal", "calctapp", "calag", "californiad"],
-            "new_york": ["ny", "nyappdiv", "nysupct", "nysd", "nyed", "nynd", "nywd"],
-            "texas": ["tex", "texapp", "texcrimapp", "txsd", "txed", "txnd", "txwd"],
-            "immigration": ["bia", "bia-aao"],  # Board of Immigration Appeals
-        }
-        return jurisdiction_courts.get(jurisdiction.lower(), [])
 
 
 # Singleton instance
@@ -818,8 +824,9 @@ courtlistener_service = CourtListenerService()
 def apply_courtlistener_token(token: str | None) -> None:
     """Propagate a CourtListener token to EVERY service that holds its own client.
 
-    There are three independent CourtListener clients, each caching the token in
-    its own ``headers``: ``courtlistener_service`` (validation, authority map,
+    There are three CourtListener-backed services sharing one client base
+    (``courtlistener_client``), each instance caching the token in its own
+    ``headers``: ``courtlistener_service`` (validation, authority map,
     RAG), ``legal_tools`` (case search, precedents, dockets, oral args, trends),
     and ``judge_intel`` (judge search/profiles). They must all be updated
     together or some Legal Tools work while others raise "token required".

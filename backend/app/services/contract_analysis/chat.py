@@ -19,6 +19,7 @@ import logging
 from typing import Any
 
 from app.services.authority_mapper.service import find_quote_offset
+from app.services.case_law_research import redact_unverified_case_references
 from app.services.llm_clients import openai_chat, utility_model
 from app.services.rag.prompt_safety import UNTRUSTED_CONTENT_RULE, untrusted_block
 
@@ -74,8 +75,10 @@ async def route_contract_message(client, message: str) -> dict[str, str]:
 async def answer_contract_question(client, text: str, message: str) -> dict[str, Any]:
     """Answer a question about the contract with verified, highlightable quotes.
 
-    Returns {"answer": str, "citations": [{quote, span_start, span_end}]}.
-    Citations the model offers but cannot ground verbatim are dropped.
+    Returns {"answer": str, "citations": [{quote, span_start, span_end}],
+    "case_law_removed": [str]}. Citations the model offers but cannot ground
+    verbatim are dropped, and any case the answer names that appears in
+    neither the contract nor the lawyer's message is removed.
     """
     if client is None:
         raise ValueError(
@@ -127,4 +130,11 @@ async def answer_contract_question(client, text: str, message: str) -> dict[str,
             )
     if dropped:
         logger.info("Contract chat dropped %d unverifiable citations", dropped)
-    return {"answer": answer or "The contract does not address this.", "citations": citations}
+    answer, removed = redact_unverified_case_references(answer, sources=[text, message])
+    if removed:
+        logger.info("Contract chat removed %d unverified case reference(s)", len(removed))
+    return {
+        "answer": answer or "The contract does not address this.",
+        "citations": citations,
+        "case_law_removed": removed,
+    }

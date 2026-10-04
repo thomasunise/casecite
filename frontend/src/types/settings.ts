@@ -16,7 +16,6 @@ export interface RagSettings {
   llmModel: string;
   temperature: number;
   maxTokens: number;
-  batchSize: number;
   contract_playbook?: string | null;
   practice_area?: string | null;
   practice_profile?: string | null;
@@ -34,5 +33,6 @@ export interface RagSettings {
 export interface SystemStats {
   totalDocuments: number;
   totalEmbeddings: number;
-  isHealthy: boolean;
+  /** null = not checked yet, or the health check itself failed. */
+  isHealthy: boolean | null;
 }

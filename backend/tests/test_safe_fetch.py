@@ -13,8 +13,9 @@ os.environ["DEBUG"] = "true"
 
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
-from app.utils.safe_fetch import UnsafeURLError, assert_public_url
+from app.utils.safe_fetch import UnsafeURLError, assert_public_url, safe_download
 
 
 class TestSchemeValidation:
@@ -108,3 +109,87 @@ class TestAllowlistRequired:
         # No default may exist that skips host allowlisting.
         with pytest.raises(TypeError):
             await assert_public_url("https://example.com/x")
+
+
+class TestRedirectCredentials:
+    """A bearer token is only ever sent to the origin it was issued for."""
+
+    async def _fetch(self, routes, url, headers):
+        """Run safe_download against *routes* ({url: response}); return requests seen."""
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return routes[str(request.url)]
+
+        real_client = httpx.AsyncClient
+
+        def factory(*args, **kwargs):
+            kwargs["transport"] = httpx.MockTransport(handler)
+            return real_client(*args, **kwargs)
+
+        with (
+            patch("app.utils.safe_fetch.httpx.AsyncClient", side_effect=factory),
+            patch("app.utils.safe_fetch.assert_public_url", new=AsyncMock()),
+        ):
+            body = await safe_download(
+                url, headers=headers, max_bytes=1024, allowed_hosts=("box.com", "boxcloud.com")
+            )
+        return body, seen
+
+    async def test_authorization_is_dropped_on_cross_host_redirect(self):
+        routes = {
+            "https://api.box.com/2.0/files/1/content": httpx.Response(
+                302, headers={"location": "https://dl.boxcloud.com/d/1?sig=abc"}
+            ),
+            "https://dl.boxcloud.com/d/1?sig=abc": httpx.Response(200, content=b"file"),
+        }
+        body, seen = await self._fetch(
+            routes,
+            "https://api.box.com/2.0/files/1/content",
+            {"Authorization": "Bearer secret", "Accept": "*/*"},
+        )
+        assert body == b"file"
+        assert seen[0].headers["authorization"] == "Bearer secret"
+        assert "authorization" not in seen[1].headers
+        assert seen[1].headers["accept"] == "*/*"
+
+    async def test_authorization_is_kept_on_same_origin_redirect(self):
+        routes = {
+            "https://api.box.com/a": httpx.Response(302, headers={"location": "/b"}),
+            "https://api.box.com/b": httpx.Response(200, content=b"file"),
+        }
+        _, seen = await self._fetch(
+            routes, "https://api.box.com/a", {"Authorization": "Bearer secret"}
+        )
+        assert seen[1].headers["authorization"] == "Bearer secret"
+
+    async def test_credentials_do_not_return_after_bouncing_back(self):
+        """Once the chain has left the origin, the token is gone for good."""
+        routes = {
+            "https://api.box.com/a": httpx.Response(
+                302, headers={"location": "https://dl.boxcloud.com/hop"}
+            ),
+            "https://dl.boxcloud.com/hop": httpx.Response(
+                302, headers={"location": "https://api.box.com/b"}
+            ),
+            "https://api.box.com/b": httpx.Response(200, content=b"file"),
+        }
+        _, seen = await self._fetch(
+            routes, "https://api.box.com/a", {"Authorization": "Bearer secret", "Cookie": "s=1"}
+        )
+        assert "authorization" not in seen[1].headers
+        assert "authorization" not in seen[2].headers
+        assert "cookie" not in seen[2].headers
+
+    async def test_scheme_downgrade_drops_credentials(self):
+        routes = {
+            "https://api.box.com/a": httpx.Response(
+                302, headers={"location": "http://api.box.com/a"}
+            ),
+            "http://api.box.com/a": httpx.Response(200, content=b"file"),
+        }
+        _, seen = await self._fetch(
+            routes, "https://api.box.com/a", {"Authorization": "Bearer secret"}
+        )
+        assert "authorization" not in seen[1].headers

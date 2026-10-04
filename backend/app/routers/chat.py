@@ -2,6 +2,9 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+import anthropic
+import httpx
+import openai
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.exc import SQLAlchemyError
@@ -18,6 +21,7 @@ from app.services.permissions import require_permission
 from app.services.rag import rag_service
 from app.services.rag.per_file import PER_FILE_MAX_FILES, per_file_answer
 from app.services.rag.routing import route_query
+from app.services.rag.service import describe_llm_failure
 from app.services.strategy import strategy_service
 from app.services.user_keys import UserAPIKeys
 from app.services.user_settings import load_user_settings
@@ -29,6 +33,31 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # The exhaustive authority map fans out to CourtListener per proposition, per
 # file — cap how many files one chat message can audit at once.
 AUTHORITY_MAP_MAX_FILES = 8
+
+
+def _authority_map_coverage_notes(files: list[dict]) -> list[str]:
+    """One plain sentence per file the authority map did not cover in full."""
+    notes = []
+    for f in files:
+        coverage = (f.get("summary") or {}).get("coverage") or {}
+        name = f.get("document_name") or f.get("document_id") or "a file"
+        gaps = []
+        if coverage.get("document_truncated"):
+            gaps.append(
+                f"{coverage.get('document_chars_read', 0):,} of "
+                f"{coverage.get('document_chars', 0):,} characters were read"
+            )
+        if coverage.get("document_windows_failed"):
+            gaps.append(f"{coverage['document_windows_failed']} section(s) could not be analysed")
+        identified = coverage.get("propositions_identified", 0)
+        researched = coverage.get("propositions_researched", 0)
+        if identified > researched:
+            gaps.append(f"{researched} of {identified} propositions were researched")
+        if coverage.get("opinions_partially_read"):
+            gaps.append(f"{coverage['opinions_partially_read']} opinion(s) were only partly read")
+        if gaps:
+            notes.append(f"{name}: {'; '.join(gaps)}.")
+    return notes
 
 
 @router.post("/export")
@@ -79,7 +108,11 @@ async def chat(
     user_id = current_user.user_id
     user_email = current_user.email
 
-    # Pre-resolve document IDs (requires await, must happen before returning 202)
+    # Pre-resolve document IDs (requires await, must happen before returning 202).
+    # None means "no scope — search everything the user can see". A list is an
+    # explicit scope and stays one even when EMPTY (a folder with nothing
+    # indexed yet): downstream code answers "nothing in that scope" rather
+    # than widening the search to the rest of the knowledge base.
     document_ids = None
     if request.document_filter and request.include_documents:
         if not request.document_filter.search_all:
@@ -120,7 +153,8 @@ async def chat(
         }
 
     async def do_work():
-        logger.debug(f"Chat query from user {user_id}: {request.query[:100]}...")
+        # Query text is client-confidential: log its size, never its content.
+        logger.debug(f"Chat query from user {user_id} ({len(request.query)} chars)")
 
         # Zero-controls composer: decide per message whether this is a grounded
         # question or a strategy ask, and whether authority would help. An
@@ -128,7 +162,7 @@ async def chat(
         # also distills the case-law SEARCH TERM — the raw message ("find me
         # case law for a dwi") is never a usable keyword query.
         intent, wants_authority, case_law_query, per_file = await route_query(
-            request.query, user_keys
+            request.query, user_keys, model=user_settings.llm_model
         )
         include_case_law = (
             request.include_case_law if request.include_case_law is not None else wants_authority
@@ -189,6 +223,9 @@ async def chat(
                             "authorities": sum(f["summary"]["authorities"] for f in files),
                             "verified": sum(f["summary"]["verified"] for f in files),
                         },
+                        # What the mapper's bounds left out, per file — empty
+                        # when every file was covered in full.
+                        "coverage_notes": _authority_map_coverage_notes(files),
                     }
 
                 map_job_id = await job_manager.submit(
@@ -202,9 +239,10 @@ async def chat(
                 content = (
                     f"Mapping supporting case law across "
                     f"{len(docs_meta)} file{'s' if len(docs_meta) != 1 else ''} "
-                    f"({names}) — reading each file in full, extracting every legal "
-                    "proposition, and verifying authority for each one against the "
-                    "real opinions."
+                    f"({names}) — extracting legal propositions from each file and "
+                    "checking authority for them against the real opinions. The "
+                    "analysis is bounded; anything it leaves out of a long file is "
+                    "listed with the results."
                 )
             result = {
                 "content": content,
@@ -299,6 +337,7 @@ async def chat(
                     document_ids=document_ids,
                     user_id=user_id,
                     user_keys=user_keys,
+                    model=user_settings.llm_model,
                 )
             except Exception as e:  # per-file must never kill chat
                 logger.warning(f"Per-file answering failed, answering normally: {e}")
@@ -402,6 +441,11 @@ async def chat(
     try:
         result_data = await do_work()
         return result_data
+    except (openai.OpenAIError, anthropic.AnthropicError, httpx.HTTPError) as e:
+        # A provider/network failure that escaped the per-stage handling: say
+        # what happened instead of a bare 500 (the upstream body is only logged).
+        logger.error(f"Chat provider error for user {user_id}: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail=describe_llm_failure(e))
     except (ValueError, KeyError, ConnectionError, TimeoutError, OSError, RuntimeError) as e:
         logger.error(f"Chat error for user {user_id}: {e}", exc_info=True)
         raise HTTPException(

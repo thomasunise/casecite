@@ -3,6 +3,7 @@ import { api } from '../../../api';
 import { useUIStore } from '../../../stores/uiStore';
 import { useAuthStore } from '../../../stores/authStore';
 import { Icon } from '../../shared/Icon';
+import { downloadBlob } from '../../../utils/downloadBlob';
 import type { AdminUser, RolePermissionsMatrix } from '../../../api/types';
 
 interface UsersTabProps {
@@ -29,6 +30,10 @@ export const UsersTab = ({ s }: UsersTabProps) => {
   const [inviteRole, setInviteRole] = useState('attorney');
   const [inviting, setInviting] = useState(false);
   const [tempPassword, setTempPassword] = useState<string | null>(null);
+  // Row with an action in flight, and the row whose delete panel is open.
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -119,6 +124,85 @@ export const UsersTab = ({ s }: UsersTabProps) => {
     }
   };
 
+  /** Run one admin action on a user row, with a busy flag and an error toast. */
+  const runUserAction = async (user: AdminUser, action: () => Promise<void>, failure: string) => {
+    setBusyUserId(user.id);
+    try {
+      await action();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : failure, 'error');
+    } finally {
+      setBusyUserId(null);
+    }
+  };
+
+  const applyActive = (user: AdminUser, isActive: boolean) =>
+    runUserAction(user, async () => {
+      const updated = await api.setUserActive(user.id, isActive);
+      setUsers((prev) => prev.map(u => (u.id === user.id ? { ...u, ...updated } : u)));
+      addToast(isActive ? `${user.email} reactivated` : `${user.email} deactivated and signed out`, 'success');
+    }, 'Failed to update the account');
+
+  const handleSetActive = (user: AdminUser, isActive: boolean) => {
+    if (isActive) { applyActive(user, true); return; }
+    showConfirm({
+      title: `Deactivate ${user.email}?`,
+      message: 'They are signed out everywhere and can no longer sign in. Their documents, conversations and analyses are kept, and the account can be reactivated later.',
+      type: 'warning',
+      confirmText: 'Deactivate',
+      onConfirm: () => { applyActive(user, false); },
+    });
+  };
+
+  const handleForceSignOut = (user: AdminUser) => {
+    showConfirm({
+      title: `Sign ${user.email} out everywhere?`,
+      message: 'Every session and token for this account is ended on all devices. The account stays active — they can sign in again with their credentials.',
+      type: 'warning',
+      confirmText: 'Sign out everywhere',
+      onConfirm: () => {
+        runUserAction(user, async () => {
+          await api.forceSignOutUser(user.id);
+          addToast(`${user.email} was signed out on every device`, 'success');
+        }, 'Failed to sign the user out');
+      },
+    });
+  };
+
+  const handleResetMfa = (user: AdminUser) => {
+    showConfirm({
+      title: `Reset two-factor authentication for ${user.email}?`,
+      message: 'Their authenticator enrollment and recovery codes are removed and they are signed out everywhere. Use this only after confirming their identity — for example when they have lost their device and their recovery codes.',
+      type: 'warning',
+      confirmText: 'Reset two-factor',
+      onConfirm: () => {
+        runUserAction(user, async () => {
+          await api.resetUserMfa(user.id);
+          addToast(`Two-factor authentication reset for ${user.email}`, 'success');
+        }, 'Failed to reset two-factor authentication');
+      },
+    });
+  };
+
+  const handleExport = (user: AdminUser) =>
+    runUserAction(user, async () => {
+      const data = await api.exportUserData(user.id);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      downloadBlob(blob, `casecite-user-export-${user.email.replace(/[^a-z0-9.@_-]/gi, '_')}.json`);
+      addToast(`Exported data for ${user.email}`, 'success');
+    }, 'Failed to export user data');
+
+  const openDelete = (user: AdminUser) => { setDeleteTarget(user); setDeleteConfirmText(''); };
+  const closeDelete = () => { setDeleteTarget(null); setDeleteConfirmText(''); };
+
+  const handleDelete = (user: AdminUser) =>
+    runUserAction(user, async () => {
+      await api.deleteUser(user.id);
+      setUsers((prev) => prev.filter(u => u.id !== user.id));
+      closeDelete();
+      addToast(`${user.email} and their data were permanently deleted`, 'success');
+    }, 'Failed to delete the user');
+
   const copyTempPassword = () => {
     if (tempPassword) {
       navigator.clipboard?.writeText(tempPassword);
@@ -166,7 +250,10 @@ export const UsersTab = ({ s }: UsersTabProps) => {
 
         {tempPassword && (
           <div className={s.tempPasswordBox}>
-            <div className={s.tempPasswordLabel}>Temporary password — share it with the user (shown once):</div>
+            <div className={s.tempPasswordLabel}>
+              Temporary password — share it with the user (shown once). They must choose their own
+              password the first time they sign in.
+            </div>
             <div className={s.tempPasswordValue}>
               <span>{tempPassword}</span>
               <button className={s.btnSecondaryXSmall} onClick={copyTempPassword}>
@@ -181,25 +268,91 @@ export const UsersTab = ({ s }: UsersTabProps) => {
       <div>
         <div className={s.keyStatusTitle}>Users ({users.length})</div>
         <div className={s.userList}>
-          {users.map(u => (
-            <div key={u.id} className={s.userRow}>
-              <div className={s.userRowInfo}>
-                <div className={s.userName}>
-                  {u.name || '(no name)'}
-                  {u.id === currentUserId && <span className={s.youBadge}>You</span>}
+          {users.map(u => {
+            const isSelf = u.id === currentUserId;
+            const busy = busyUserId === u.id;
+            return (
+            <div key={u.id} className={s.userCard}>
+              <div className={s.userRow}>
+                <div className={s.userRowInfo}>
+                  <div className={s.userName}>
+                    {u.name || '(no name)'}
+                    {isSelf && <span className={s.youBadge}>You</span>}
+                    {!u.is_active && <span className={s.inactiveBadge}>Deactivated</span>}
+                    {u.must_change_password && <span className={s.inactiveBadge}>Temporary password</span>}
+                    {u.mfa_enabled === false && <span className={s.inactiveBadge}>No two-factor</span>}
+                  </div>
+                  <div className={s.userEmail}>{u.email}</div>
                 </div>
-                <div className={s.userEmail}>{u.email}</div>
+                <select
+                  aria-label={`Role for ${u.email}`}
+                  className={s.userRoleSelect}
+                  value={u.roles[0] || 'attorney'}
+                  onChange={e => handleRoleChange(u, e.target.value)}
+                >
+                  {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
               </div>
-              <select
-                aria-label={`Role for ${u.email}`}
-                className={s.userRoleSelect}
-                value={u.roles[0] || 'attorney'}
-                onChange={e => handleRoleChange(u, e.target.value)}
-              >
-                {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
+              <div className={s.userActions}>
+                <button className={s.btnSecondaryXSmall} disabled={busy} onClick={() => handleExport(u)}>
+                  <Icon name="Download" size={12} /> Export data
+                </button>
+                {/* Your own account is managed from the Security tab — these
+                    actions would lock you out of the page you are on. */}
+                {!isSelf && (
+                  <>
+                    <button className={s.btnSecondaryXSmall} disabled={busy} onClick={() => handleForceSignOut(u)}>
+                      <Icon name="LogOut" size={12} /> Sign out everywhere
+                    </button>
+                    <button className={s.btnSecondaryXSmall} disabled={busy} onClick={() => handleResetMfa(u)}>
+                      <Icon name="ShieldOff" size={12} /> Reset two-factor
+                    </button>
+                    <button className={s.btnSecondaryXSmall} disabled={busy} onClick={() => handleSetActive(u, !u.is_active)}>
+                      <Icon name={u.is_active ? 'Lock' : 'Check'} size={12} /> {u.is_active ? 'Deactivate' : 'Reactivate'}
+                    </button>
+                    <button className={s.btnDangerXSmall} disabled={busy} onClick={() => openDelete(u)}>
+                      <Icon name="Trash2" size={12} /> Delete…
+                    </button>
+                  </>
+                )}
+              </div>
+              {deleteTarget?.id === u.id && (
+                <div className={s.dangerPanel} role="group" aria-label={`Delete ${u.email}`}>
+                  <div className={s.dangerTitle}>
+                    <Icon name="AlertTriangle" size={14} /> Permanently delete this user and everything they own
+                  </div>
+                  <p className={s.dangerText}>
+                    This destroys {u.email}&apos;s uploaded documents and their search index, their
+                    conversations, contract analyses, authority maps, saved API keys and connector
+                    connections, and every matter they own. Nothing is transferred to another user and
+                    it cannot be undone. If the firm must keep this work product, <strong>deactivate</strong> the
+                    account instead — that blocks sign-in and keeps the data. Export first if you need a record.
+                  </p>
+                  <label className={s.settingLabel} htmlFor={`${id}-delete-confirm`}>
+                    Type <strong>{u.email}</strong> to confirm
+                  </label>
+                  <input
+                    id={`${id}-delete-confirm`}
+                    className={s.modalInput}
+                    value={deleteConfirmText}
+                    onChange={e => setDeleteConfirmText(e.target.value)}
+                    autoComplete="off"
+                  />
+                  <div className={s.boxActions}>
+                    <button className={s.btnSecondaryXSmall} onClick={closeDelete}>Cancel</button>
+                    <button
+                      className={s.btnDangerXSmall}
+                      disabled={busy || deleteConfirmText.trim().toLowerCase() !== u.email.toLowerCase()}
+                      onClick={() => handleDelete(u)}
+                    >
+                      {busy ? 'Deleting…' : 'Delete user and all their data'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
-          ))}
+            );
+          })}
           {users.length === 0 && <span className={s.helpText}>No users found.</span>}
         </div>
       </div>

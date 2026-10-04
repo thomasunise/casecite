@@ -113,7 +113,9 @@ def test_shared_matter_document_visible_to_member_not_stranger(client):
         listed = client.get("/api/v1/documents", headers=_headers(member))
         assert listed.status_code == 200
         assert doc_id in {d["id"] for d in listed.json()["documents"]}
-        assert client.get(f"/api/v1/documents/{doc_id}", headers=_headers(member)).status_code == 200
+        assert (
+            client.get(f"/api/v1/documents/{doc_id}", headers=_headers(member)).status_code == 200
+        )
 
         # Stranger (not a member) sees neither.
         listed_s = client.get("/api/v1/documents", headers=_headers(stranger))
@@ -143,7 +145,10 @@ def test_shared_matter_chat_session_visible_to_member_not_stranger(client):
     # Member sees it in their list and can open it.
     listed = client.get("/api/v1/chat/sessions", headers=_headers(member))
     assert session_id in {s["id"] for s in listed.json()["sessions"]}
-    assert client.get(f"/api/v1/chat/sessions/{session_id}", headers=_headers(member)).status_code == 200
+    assert (
+        client.get(f"/api/v1/chat/sessions/{session_id}", headers=_headers(member)).status_code
+        == 200
+    )
 
     # Stranger sees neither.
     listed_s = client.get("/api/v1/chat/sessions", headers=_headers(stranger))
@@ -180,3 +185,70 @@ def test_upload_into_non_member_matter_is_forbidden(client):
         data={"matter_id": matter_id},
     )
     assert r.status_code == 403
+
+
+def test_matter_member_can_read_but_not_delete_owners_document_or_chat(client):
+    """Membership shares read access. Deleting a colleague's document or chat is
+    reserved for the item's owner and the matter's owner."""
+    owner = _user(f"owner-{uuid.uuid4().hex[:8]}")
+    member = _user(f"member-{uuid.uuid4().hex[:8]}")
+    matter_id = _make_shared_matter(owner.id, member.id)
+
+    # The MEMBER files a document and a chat under the matter.
+    doc_id = f"shared-{uuid.uuid4().hex[:8]}"
+    document_service.documents[doc_id] = Document(
+        id=doc_id,
+        user_id=member.id,
+        matter_id=matter_id,
+        filename="member_notes.pdf",
+        content_type="application/pdf",
+        size=100,
+        source=ConnectorType.LOCAL,
+        status=DocumentStatus.INDEXED,
+        created_at=datetime.now(UTC),
+    )
+    owner_doc_id = f"shared-{uuid.uuid4().hex[:8]}"
+    document_service.documents[owner_doc_id] = document_service.documents[doc_id].model_copy(
+        update={"id": owner_doc_id, "user_id": owner.id, "filename": "owner_brief.pdf"}
+    )
+    owner_chat = client.post(
+        "/api/v1/chat/sessions",
+        headers=_headers(owner),
+        json={"title": "Owner strategy", "matter_id": matter_id},
+    ).json()["id"]
+
+    try:
+        # The member can read the owner's document and chat...
+        assert (
+            client.get(f"/api/v1/documents/{owner_doc_id}", headers=_headers(member)).status_code
+            == 200
+        )
+        assert (
+            client.get(f"/api/v1/chat/sessions/{owner_chat}", headers=_headers(member)).status_code
+            == 200
+        )
+        # ...but cannot delete either.
+        assert (
+            client.delete(f"/api/v1/documents/{owner_doc_id}", headers=_headers(member)).status_code
+            == 404
+        )
+        assert owner_doc_id in document_service.documents
+        assert (
+            client.delete(
+                f"/api/v1/chat/sessions/{owner_chat}", headers=_headers(member)
+            ).status_code
+            == 404
+        )
+        assert (
+            client.get(f"/api/v1/chat/sessions/{owner_chat}", headers=_headers(owner)).status_code
+            == 200
+        )
+
+        # The matter OWNER can delete a document a member filed under their matter.
+        with patch("app.services.documents.rag_service", None):
+            resp = client.delete(f"/api/v1/documents/{doc_id}", headers=_headers(owner))
+        assert resp.status_code == 200
+        assert doc_id not in document_service.documents
+    finally:
+        document_service.documents.pop(doc_id, None)
+        document_service.documents.pop(owner_doc_id, None)

@@ -26,7 +26,6 @@ function defaultProps(overrides: Record<string, any> = {}) {
     llmModel: 'gpt-5.5',
     temperature: 0.1,
     maxTokens: 4096,
-    batchSize: 100,
     custom_system_prompt: null,
     custom_grounding_rules: null,
     custom_factual_prompt: null,

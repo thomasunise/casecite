@@ -7,7 +7,7 @@ parameterized /{session_id} catch-alls.
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -17,11 +17,13 @@ from app.models.schemas import (
     ChatSessionSummary,
     CreateChatSessionRequest,
 )
-from app.routers._matter_deps import accessible_matter_ids
+from app.routers._matter_deps import accessible_matter_ids, owned_matter_ids
 from app.services import chat_sessions as chat_session_service
 from app.services import matters as matters_service
+from app.services.audit import AuditEventType, audit_service
 from app.services.auth import TokenData
 from app.services.permissions import require_permission
+from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat/sessions", tags=["chat-sessions"])
@@ -59,6 +61,7 @@ async def create_chat_session(
 @router.get("/{session_id}", response_model=ChatSessionDetail)
 async def get_chat_session(
     session_id: str,
+    request: Request,
     current_user: TokenData = require_permission("chat.use"),
     accessible_matters: set[str] = Depends(accessible_matter_ids),
 ) -> ChatSessionDetail:
@@ -68,19 +71,40 @@ async def get_chat_session(
     )
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_ACCESS,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="chat_session",
+        resource_id=session_id,
+        ip_address=get_client_ip(request),
+    )
     return session
 
 
 @router.delete("/{session_id}")
 async def delete_chat_session(
     session_id: str,
+    request: Request,
     current_user: TokenData = require_permission("chat.use"),
-    accessible_matters: set[str] = Depends(accessible_matter_ids),
+    owned_matters: set[str] = Depends(owned_matter_ids),
 ) -> dict:
-    """Delete a session (own or shared via a matter) and all its messages."""
+    """Delete a session and all its messages.
+
+    Allowed for the session's owner and for the OWNER of the matter it is filed
+    under; plain matter members can read a shared session but not delete it.
+    """
     deleted = await chat_session_service.delete_session(
-        session_id, current_user.user_id, accessible_matter_ids=accessible_matters
+        session_id, current_user.user_id, accessible_matter_ids=owned_matters
     )
     if not deleted:
         raise HTTPException(status_code=404, detail="Chat session not found")
+    await audit_service.log_event(
+        event_type=AuditEventType.DATA_DELETION,
+        user_id=current_user.user_id,
+        user_email=current_user.email,
+        resource_type="chat_session",
+        resource_id=session_id,
+        ip_address=get_client_ip(request),
+    )
     return {"status": "deleted", "id": session_id}

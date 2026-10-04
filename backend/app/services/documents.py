@@ -17,7 +17,7 @@ from app.models.schemas import (
     DocumentTreeResponse,
 )
 from app.services.rag import rag_service
-from app.services.text_extraction import text_extraction_service
+from app.services.text_extraction import ExtractionResult, text_extraction_service
 from app.utils import file_crypto
 
 if TYPE_CHECKING:
@@ -46,6 +46,11 @@ def _humanize_indexing_error(e: Exception) -> str:
     if "rate limit" in lowered or "429" in lowered:
         return "The embedding provider rate-limited the request. Try again in a minute."
     return (raw[:200] + "…") if len(raw) > 200 else (raw or "Indexing failed")
+
+
+class DocumentDeletionError(RuntimeError):
+    """A document could not be fully deleted. Nothing was removed from the
+    registry, so the caller can retry; the message is safe to show the user."""
 
 
 class DocumentService:
@@ -205,23 +210,27 @@ class DocumentService:
             raw = await f.read()
         return file_crypto.decrypt_bytes(raw)
 
-    async def extract_text(self, file_path: str, content_type: str) -> str:
-        """Extract text from various file formats via the unified extraction service."""
+    async def extract(self, file_path: str, content_type: str) -> ExtractionResult:
+        """Extract a stored file, returning the full result (text, the reason
+        when there is none, and warnings about anything left unread)."""
         try:
             content = await self.read_file(file_path)
             # PDF/DOCX parsing (pdfplumber/pypdf/python-docx) is CPU-bound and
             # synchronous; run it off the event loop so a large document doesn't
             # stall every concurrent request.
-            result = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 text_extraction_service.extract,
                 file_content=content,
                 content_type=content_type,
                 filename=file_path,
             )
-            return result.text
         except (ValueError, KeyError, OSError, file_crypto.FileDecryptionError) as e:
             logger.error(f"Error extracting text from {file_path}: {e}")
             raise
+
+    async def extract_text(self, file_path: str, content_type: str) -> str:
+        """Extract text from various file formats via the unified extraction service."""
+        return (await self.extract(file_path, content_type)).text
 
     async def upload_and_index(
         self,
@@ -236,7 +245,17 @@ class DocumentService:
         user_keys: Optional["UserAPIKeys"] = None,
         matter_id: str | None = None,
     ) -> Document:
-        """Upload a file and index it. Replaces existing document with same filename by default.
+        """Upload a file and index it.
+
+        A new upload replaces an existing document only when it is the same
+        document: same owner, filename, source, matter AND folder (and, for
+        connector files, the same remote id). Two different files that merely
+        share a name ("Engagement Letter.pdf" for two clients) are both kept.
+
+        When it is a replacement, the new file is indexed first and the old
+        document is deleted only once that succeeded, so a failed re-upload
+        never costs the user the copy they already had. The replaced id is
+        recorded in ``metadata["replaced_document_id"]`` and audited.
 
         Args:
             user_id: Owner user ID for tenant isolation.
@@ -246,22 +265,18 @@ class DocumentService:
                 makes the document visible to every member of that matter.
         """
 
-        # Check for existing document with same filename FOR THIS USER
-        existing_doc = None
-        for doc in self.documents.values():
-            if doc.filename == filename and doc.source == source and doc.user_id == user_id:
-                existing_doc = doc
-                break
-
-        # If exists and replace_existing is True, delete the old one first
-        if existing_doc:
-            if replace_existing:
-                logger.info(f"Replacing existing document: {filename}")
-                await self.delete_document(existing_doc.id, user_id)
-            else:
-                raise ValueError(
-                    f"Document '{filename}' already exists. Delete it first or use replace_existing=True."
-                )
+        existing_doc = self._find_replaceable(
+            filename=filename,
+            source=source,
+            user_id=user_id,
+            matter_id=matter_id,
+            source_id=source_id,
+            metadata=metadata,
+        )
+        if existing_doc and not replace_existing:
+            raise ValueError(
+                f"Document '{filename}' already exists. Delete it first or use replace_existing=True."
+            )
 
         doc_id = str(uuid.uuid4())
 
@@ -293,12 +308,18 @@ class DocumentService:
 
         try:
             # Extract text
-            text = await self.extract_text(file_path, content_type)
+            extraction = await self.extract(file_path, content_type)
+            text = extraction.text
 
             if not text.strip():
+                # Say why (scanned PDF without OCR, password-protected, corrupt…)
+                # instead of leaving a bare FAILED row.
                 doc.status = DocumentStatus.FAILED
+                doc.metadata["error"] = extraction.error or "No text could be extracted."
                 self._save_index()
                 return doc
+            if extraction.warnings:
+                doc.metadata["extraction_warning"] = " ".join(extraction.warnings)
 
             # Determine document type
             doc_type = self._classify_document(filename, text)
@@ -317,6 +338,9 @@ class DocumentService:
                 user_id=user_id,
                 matter_id=matter_id,
             )
+            if not chunk_count:
+                # Never claim an index entry that does not exist.
+                raise ValueError("Indexing produced no searchable content for this document.")
 
             doc.status = DocumentStatus.INDEXED
             doc.chunk_count = chunk_count
@@ -326,12 +350,84 @@ class DocumentService:
             # Never 500 the upload: record the document as failed with the reason
             # (e.g. missing embedding API key, unsupported content) so the UI can
             # show it instead of a generic server error.
-            logger.error(f"Error indexing document {filename}: {e}", exc_info=True)
+            logger.error(f"Error indexing document {doc_id}: {e}", exc_info=True)
             doc.status = DocumentStatus.FAILED
             doc.metadata["error"] = _humanize_indexing_error(e)
 
         self._save_index()
+
+        if existing_doc and doc.status == DocumentStatus.INDEXED:
+            await self._retire_replaced(existing_doc, doc)
         return doc
+
+    def _find_replaceable(
+        self,
+        *,
+        filename: str,
+        source: ConnectorType,
+        user_id: str,
+        matter_id: str | None,
+        source_id: str | None,
+        metadata: dict[str, Any] | None,
+    ) -> Document | None:
+        """The existing document a new upload supersedes, if any.
+
+        A file from a connector or picker is identified by its remote id: the
+        same remote file re-synced (even renamed or moved) replaces its earlier
+        copy, and two different remote files never replace each other however
+        alike their names are.
+
+        Without a remote id on both sides (local uploads, and documents synced
+        before remote ids were recorded) everything that places a document must
+        match — owner, filename, source, matter and folder. A shared filename
+        alone is not identity.
+        """
+        remote_id = source_id or (metadata or {}).get("source_id")
+        new_folder = self._derive_folder(None, metadata, source).rstrip("/")
+        fallback: Document | None = None
+        for doc in self.documents.values():
+            if doc.user_id != user_id or doc.source != source:
+                continue
+            if (doc.matter_id or None) != (matter_id or None):
+                continue
+            doc_remote_id = doc.source_id or (doc.metadata or {}).get("source_id")
+            if remote_id and doc_remote_id:
+                if doc_remote_id == remote_id:
+                    return doc
+                continue
+            if (
+                fallback is None
+                and doc.filename == filename
+                and self._get_folder_path(doc).rstrip("/") == new_folder
+            ):
+                fallback = doc
+        return fallback
+
+    async def _retire_replaced(self, old: Document, new: Document) -> None:
+        """Delete a document that a successful re-upload has superseded."""
+        try:
+            deleted = await self.delete_document(old.id, old.user_id)
+        except (DocumentDeletionError, OSError, ValueError, KeyError) as e:
+            # The new copy is indexed; keeping the old one too is the safe failure.
+            logger.error(f"Could not remove replaced document {old.id}: {e}")
+            return
+        if not deleted:
+            return
+        new.metadata["replaced_document_id"] = old.id
+        self._save_index()
+        logger.info(f"Document {old.id} replaced by re-upload {new.id}")
+        try:
+            from app.services.audit import AuditEventType, audit_service
+
+            await audit_service.log_event(
+                event_type=AuditEventType.DOCUMENT_DELETE,
+                user_id=new.user_id,
+                resource_type="document",
+                resource_id=old.id,
+                details={"action": "replaced_by_upload", "replaced_by": new.id},
+            )
+        except Exception as e:  # the replacement already happened; never fail the upload
+            logger.error(f"Audit log failed for replaced document {old.id}: {e}")
 
     def encrypt_existing_files(self) -> dict[str, int]:
         """One-time startup migration: rewrite legacy plaintext uploads encrypted.
@@ -404,40 +500,15 @@ class DocumentService:
                 continue
 
             logger.warning(
-                f"Document '{doc.filename}' ({doc.id}) is marked indexed but has no "
-                f"chunks in the vector store — re-indexing from the stored file."
+                f"Document {doc.id} is marked indexed but has no chunks in the "
+                "vector store — re-indexing from the stored file."
             )
+            if doc.user_id not in user_keys_cache:
+                user_keys_cache[doc.user_id] = UserAPIKeys.for_user(doc.user_id)
             try:
-                file_ext = os.path.splitext(doc.filename)[1]
-                user_path = os.path.join(
-                    self._get_user_upload_dir(doc.user_id), f"{doc.id}{file_ext}"
-                )
-                legacy_path = os.path.join(settings.upload_dir, f"{doc.id}{file_ext}")
-                file_path = user_path if os.path.exists(user_path) else legacy_path
-                if not os.path.exists(file_path):
-                    raise FileNotFoundError("the stored file is missing")
-
-                text = await self.extract_text(file_path, doc.content_type)
-                if not text.strip():
-                    raise ValueError("no text could be extracted")
-
-                if doc.user_id not in user_keys_cache:
-                    user_keys_cache[doc.user_id] = UserAPIKeys.for_user(doc.user_id)
-                chunk_count = await rag_service.index_document(
-                    document_id=doc.id,
-                    text=text,
-                    filename=doc.filename,
-                    source=doc.source.value,
-                    doc_type=self._classify_document(doc.filename, text),
-                    metadata=doc.metadata,
-                    user_keys=user_keys_cache[doc.user_id],
-                    user_id=doc.user_id,
-                )
-                doc.chunk_count = chunk_count
-                doc.indexed_at = datetime.now(UTC)
-                doc.metadata.pop("error", None)
+                chunk_count = await self._index_from_stored_file(doc, user_keys_cache[doc.user_id])
                 stats["reindexed"] += 1
-                logger.info(f"Re-indexed '{doc.filename}': {chunk_count} chunks")
+                logger.info(f"Re-indexed document {doc.id}: {chunk_count} chunks")
             except Exception as e:  # per-document; keep repairing the rest
                 doc.status = DocumentStatus.FAILED
                 doc.metadata["error"] = (
@@ -446,13 +517,103 @@ class DocumentService:
                     "Re-upload this document to restore it."
                 )
                 stats["failed"] += 1
-                logger.error(f"Re-index failed for '{doc.filename}' ({doc.id}): {e}")
+                logger.error(f"Re-index failed for document {doc.id}: {e}")
 
         if stats["reindexed"] or stats["failed"]:
             self._save_index()
         if stats["checked"]:
             logger.info(f"Index reconciliation: {stats}")
         return stats
+
+    def _stored_file_path(self, doc: Document) -> str | None:
+        """Path of a document's stored file under its OWNER's upload dir (or the
+        legacy flat layout), or None when it is missing."""
+        file_ext = os.path.splitext(doc.filename)[1]
+        candidates = [
+            os.path.join(self._get_user_upload_dir(doc.user_id), f"{doc.id}{file_ext}"),
+            os.path.join(settings.upload_dir, f"{doc.id}{file_ext}"),
+        ]
+        return next((p for p in candidates if os.path.exists(p)), None)
+
+    async def _index_from_stored_file(
+        self,
+        doc: Document,
+        user_keys: Optional["UserAPIKeys"] = None,
+        replace: bool = False,
+    ) -> int:
+        """(Re-)index a document from its stored file, keeping where it is filed.
+
+        The matter, folder and metadata travel with the vectors: dropping them
+        on a rebuild would silently un-share a matter document. Raises when the
+        file is missing, yields no text, or produces no chunks — the caller
+        decides how to record the failure.
+
+        ``replace=True`` is for a document that already has vectors: the new
+        chunks are embedded first and the old ones swapped out only once that
+        succeeded, so a provider failure leaves the document searchable.
+        """
+        if rag_service is None:
+            raise RuntimeError("RAG service not available. Check vector DB configuration.")
+        file_path = self._stored_file_path(doc)
+        if not file_path:
+            raise FileNotFoundError("the stored file is missing")
+
+        extraction = await self.extract(file_path, doc.content_type)
+        text = extraction.text
+        if not text.strip():
+            raise ValueError(extraction.error or "no text could be extracted")
+
+        metadata = {k: v for k, v in (doc.metadata or {}).items() if k != "error"}
+        index = rag_service.replace_document if replace else rag_service.index_document
+        chunk_count = await index(
+            document_id=doc.id,
+            text=text,
+            filename=doc.filename,
+            source=doc.source.value,
+            doc_type=self._classify_document(doc.filename, text),
+            metadata=metadata,
+            folder_path=doc.folder_path,
+            user_keys=user_keys,
+            user_id=doc.user_id,
+            matter_id=doc.matter_id,
+        )
+        if not chunk_count:
+            raise ValueError("indexing produced no searchable content")
+        doc.status = DocumentStatus.INDEXED
+        doc.chunk_count = chunk_count
+        doc.indexed_at = datetime.now(UTC)
+        doc.metadata.pop("error", None)
+        return chunk_count
+
+    async def reindex_document(
+        self,
+        doc_id: str,
+        user_id: str,
+        user_keys: Optional["UserAPIKeys"] = None,
+    ) -> Document | None:
+        """Rebuild one document's vectors from its stored file (owner-scoped).
+
+        The new chunks are extracted and embedded BEFORE the old vectors are
+        touched, so an unreadable file or a provider failure raises and leaves
+        the document indexed and searchable exactly as it was. Only when the
+        store itself fails after the old vectors were removed is the document
+        marked FAILED with the reason — it is never left INDEXED with no
+        vectors behind it.
+        """
+        doc = self.documents.get(doc_id)
+        if not doc or doc.user_id != user_id:
+            return None
+        try:
+            await self._index_from_stored_file(doc, user_keys, replace=True)
+        except Exception as e:  # provider SDK / store errors share no base class
+            if not getattr(e, "vectors_removed", False):
+                raise
+            doc.status = DocumentStatus.FAILED
+            doc.chunk_count = 0
+            doc.metadata["error"] = f"Re-indexing failed: {_humanize_indexing_error(e)}"
+            logger.error(f"Re-index failed for document {doc.id}: {e}")
+        self._save_index()
+        return doc
 
     def _classify_document(self, filename: str, text: str) -> str:
         """Classify document type based on filename and content."""
@@ -511,12 +672,7 @@ class DocumentService:
         doc = await self.get_document(doc_id, user_id, accessible_matter_ids)
         if not doc:
             return None
-        file_ext = os.path.splitext(doc.filename)[1]
-        candidates = [
-            os.path.join(self._get_user_upload_dir(doc.user_id), f"{doc_id}{file_ext}"),
-            os.path.join(settings.upload_dir, f"{doc_id}{file_ext}"),
-        ]
-        file_path = next((p for p in candidates if os.path.exists(p)), None)
+        file_path = self._stored_file_path(doc)
         if not file_path:
             return None
         text = await self.extract_text(file_path, doc.content_type)
@@ -554,16 +710,46 @@ class DocumentService:
         user_id: str,
         accessible_matter_ids: set[str] | None = None,
     ) -> bool:
-        """Delete a document, scoped to the caller's tenant (owner or matter member)."""
+        """Delete a document, scoped to the caller's tenant (owner or matter member).
+
+        Removes everything derived from it as well: its vectors, and the
+        contract analyses and authority maps run on it (which hold verbatim
+        quotes of the text). Raises ``DocumentDeletionError`` — leaving the
+        document in place so the delete can be retried — when the vectors or
+        derived rows cannot be removed; a document must never disappear from
+        the list while its content stays searchable.
+        """
         doc = self.documents.get(doc_id)
         if not doc or not self._can_access(doc, user_id, accessible_matter_ids):
             return False
+        await self._remove_document(doc)
+        self._save_index()
+        return True
 
-        # Delete from vector DB
+    async def _remove_document(self, doc: Document) -> None:
+        """Remove one document's vectors, derived rows, stored file and registry
+        entry, in that order. The caller saves the index."""
+        doc_id = doc.id
+
+        # Vectors first: if these cannot be removed, stop before anything else.
         if rag_service is not None:
-            await rag_service.delete_document(doc_id)
+            try:
+                removed = await rag_service.delete_document(doc_id)
+            except Exception as e:  # vector stores raise their own exception trees
+                logger.error(f"Vector deletion failed for document {doc_id}: {e}")
+                raise DocumentDeletionError(
+                    "The document's search index entries could not be removed. "
+                    "The document was not deleted; try again."
+                ) from e
+            if removed is False:
+                raise DocumentDeletionError(
+                    "The document's search index entries could not be removed. "
+                    "The document was not deleted; try again."
+                )
         else:
             logger.warning(f"RAG service unavailable, skipping vector deletion for {doc_id}")
+
+        await self._delete_derived_data([doc_id])
 
         # Delete file from the OWNER's upload dir (a member deleting a shared doc
         # still removes the owner's stored file), then legacy path.
@@ -579,13 +765,91 @@ class DocumentService:
             elif os.path.exists(legacy_file_path):
                 os.remove(legacy_file_path)
         except (ValueError, OSError) as e:
-            logger.error(f"Error deleting file: {e}")
+            logger.error(f"Error deleting stored file for document {doc_id}: {e}")
 
         # Remove from index
-        del self.documents[doc_id]
-        self._save_index()
+        self.documents.pop(doc_id, None)
 
-        return True
+    async def _delete_derived_data(self, document_ids: list[str]) -> None:
+        """Delete analysis output derived from the given documents.
+
+        Contract-analysis runs (with their parties, obligations, deadlines,
+        defined terms, clause findings and deviations) and authority-map runs
+        (with their mappings) quote the source text verbatim and have no
+        foreign key to cascade from, so they are removed explicitly — children
+        before their parent runs.
+        """
+        if not document_ids:
+            return
+        from sqlalchemy import delete as sa_delete
+        from sqlalchemy import select
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from app.database import get_db_context
+        from app.models.authority_map import AuthorityMapping, AuthorityMapRun
+        from app.models.clause_intel import (
+            ClauseDeviationFinding,
+            ClauseTagFinding,
+            ContractAnalysisRun,
+        )
+        from app.models.contract_analysis import (
+            ContractDeadline,
+            ContractDefinedTerm,
+            ContractObligation,
+            ContractParty,
+        )
+
+        try:
+            async with get_db_context() as db:
+                run_ids = (
+                    (
+                        await db.execute(
+                            select(ContractAnalysisRun.id).where(
+                                ContractAnalysisRun.document_id.in_(document_ids)
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if run_ids:
+                    for child in (
+                        ContractParty,
+                        ContractObligation,
+                        ContractDeadline,
+                        ContractDefinedTerm,
+                        ClauseDeviationFinding,
+                        ClauseTagFinding,
+                    ):
+                        await db.execute(sa_delete(child).where(child.analysis_id.in_(run_ids)))
+                    await db.execute(
+                        sa_delete(ContractAnalysisRun).where(ContractAnalysisRun.id.in_(run_ids))
+                    )
+
+                map_run_ids = (
+                    (
+                        await db.execute(
+                            select(AuthorityMapRun.id).where(
+                                AuthorityMapRun.document_id.in_(document_ids)
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if map_run_ids:
+                    await db.execute(
+                        sa_delete(AuthorityMapping).where(AuthorityMapping.run_id.in_(map_run_ids))
+                    )
+                    await db.execute(
+                        sa_delete(AuthorityMapRun).where(AuthorityMapRun.id.in_(map_run_ids))
+                    )
+        except SQLAlchemyError as e:
+            logger.error(f"Derived-data deletion failed for {len(document_ids)} document(s): {e}")
+            raise DocumentDeletionError(
+                "The analyses derived from this document could not be removed. "
+                "The document was not deleted; try again."
+            ) from e
 
     async def purge_user_data(self, user_id: str) -> dict[str, Any]:
         """Delete ALL of a user's documents (files + vectors + index) and their
@@ -594,11 +858,13 @@ class DocumentService:
 
         doc_ids = [doc_id for doc_id, doc in self.documents.items() if doc.user_id == user_id]
         deleted = 0
+        failed = 0
         for doc_id in doc_ids:
             try:
                 if await self.delete_document(doc_id, user_id):
                     deleted += 1
-            except (OSError, ValueError, KeyError) as e:
+            except (DocumentDeletionError, OSError, ValueError, KeyError) as e:
+                failed += 1
                 logger.error(f"Error deleting document {doc_id} during purge: {e}")
 
         # Remove the user's upload directory (catches any stray files).
@@ -613,7 +879,7 @@ class DocumentService:
         if self.folders.pop(user_id, None) is not None:
             self._save_folders()
 
-        return {"documents_deleted": deleted}
+        return {"documents_deleted": deleted, "documents_failed": failed}
 
     def export_user_data(self, user_id: str) -> dict[str, Any]:
         """Return a JSON-serializable export of the user's documents and folders."""
@@ -641,77 +907,83 @@ class DocumentService:
         }
 
     async def clear_all(self, user_id: str) -> dict[str, Any]:
-        """Clear all documents for a user from both index and vector store."""
+        """Clear all of a user's documents: vectors, derived analyses, files, index.
+
+        Each document goes through the same path as a single delete. One whose
+        vectors or derived rows cannot be removed stays in the registry (and is
+        counted in ``failed_documents``) rather than vanishing from the list
+        while its content remains searchable.
+        """
 
         user_docs = self._get_user_documents(user_id)
-        doc_count = len(user_docs)
-
-        # Delete each document's vectors individually (user-scoped)
-        if rag_service is not None:
-            for doc_id in list(user_docs.keys()):
-                try:
-                    await rag_service.delete_document(doc_id)
-                except (
-                    ValueError,
-                    KeyError,
-                    ConnectionError,
-                    TimeoutError,
-                    OSError,
-                    RuntimeError,
-                ) as e:
-                    logger.error(f"Error deleting vectors for doc {doc_id}: {e}")
-        else:
-            logger.warning("RAG service unavailable, skipping vector deletion for clear_all")
-
-        # Clear user's documents from index
-        for doc_id in list(user_docs.keys()):
-            del self.documents[doc_id]
+        cleared = 0
+        failed = 0
+        for doc in list(user_docs.values()):
+            try:
+                await self._remove_document(doc)
+                cleared += 1
+            except (DocumentDeletionError, OSError, ValueError, KeyError) as e:
+                failed += 1
+                logger.error(f"Error clearing document {doc.id}: {e}")
         self._save_index()
 
-        # Delete user's uploaded files
-        import shutil
+        # Remove stray files — only once nothing that failed still needs its file.
+        if not failed:
+            import shutil
 
-        user_upload_dir = self._get_user_upload_dir(user_id)
-        try:
-            for item in os.listdir(user_upload_dir):
-                item_path = os.path.join(user_upload_dir, item)
-                if os.path.isfile(item_path):
-                    os.remove(item_path)
-                elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-        except (ValueError, OSError) as e:
-            logger.error(f"Error clearing upload directory: {e}")
+            user_upload_dir = self._get_user_upload_dir(user_id)
+            try:
+                for item in os.listdir(user_upload_dir):
+                    item_path = os.path.join(user_upload_dir, item)
+                    if os.path.isfile(item_path):
+                        os.remove(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+            except (ValueError, OSError) as e:
+                logger.error(f"Error clearing upload directory: {e}")
 
-        return {"cleared_documents": doc_count, "status": "success"}
+        return {
+            "cleared_documents": cleared,
+            "failed_documents": failed,
+            "status": "success" if not failed else "partial",
+        }
 
     def _get_folder_path(self, doc: Document) -> str:
         """Extract or derive folder path from document metadata."""
+        return self._derive_folder(doc.folder_path, doc.metadata, doc.source)
+
+    @staticmethod
+    def _derive_folder(
+        folder_path: str | None, metadata: dict[str, Any] | None, source: ConnectorType
+    ) -> str:
+        """Folder a document lives in: the explicit one, else the one its
+        connector metadata describes, else the source's root."""
         import posixpath
 
         raw_path = None
 
         # Check if folder_path is explicitly set
-        if doc.folder_path:
-            raw_path = doc.folder_path
-        elif doc.metadata:
-            if "folder_path" in doc.metadata:
-                raw_path = doc.metadata["folder_path"]
-            elif "parent_folder" in doc.metadata:
-                raw_path = doc.metadata["parent_folder"]
-            elif "path" in doc.metadata:
+        if folder_path:
+            raw_path = folder_path
+        elif metadata:
+            if "folder_path" in metadata:
+                raw_path = metadata["folder_path"]
+            elif "parent_folder" in metadata:
+                raw_path = metadata["parent_folder"]
+            elif "path" in metadata:
                 # Extract folder from full path
-                path = doc.metadata["path"]
+                path = metadata["path"]
                 if "/" in path:
                     raw_path = "/".join(path.split("/")[:-1]) + "/"
 
         if not raw_path:
-            return f"/{doc.source.value}/"
+            return f"/{source.value}/"
 
         # Sanitize: normalize and reject directory traversal
         normalized = posixpath.normpath(raw_path)
         if ".." in normalized.split("/"):
-            logger.warning(f"Blocked directory traversal in folder_path: {raw_path}")
-            return f"/{doc.source.value}/"
+            logger.warning("Blocked directory traversal in a document folder path")
+            return f"/{source.value}/"
 
         return normalized
 

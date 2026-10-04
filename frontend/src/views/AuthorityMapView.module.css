@@ -119,3 +119,11 @@
 .emptyText { margin: 0; max-width: 460px; font-size: 13px; line-height: 1.5; }
 .emptyActions { display: flex; gap: 10px; margin-top: 14px; }
 
+
+/* Delete the stored run behind the current result. */
+.deleteBtn {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 8px; border: 1px solid var(--gray-300); border-radius: 6px;
+  background: white; color: var(--gray-600); font-size: 11px; cursor: pointer;
+}
+.deleteBtn:hover { color: var(--red-700); border-color: var(--red-700); }

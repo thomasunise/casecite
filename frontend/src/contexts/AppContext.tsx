@@ -5,7 +5,7 @@ import { createContext, useContext } from 'react';
  * All other state has been migrated to Zustand stores or feature contexts.
  */
 export interface AppContextValue {
-  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  fileInputRef: React.RefObject<HTMLInputElement>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);

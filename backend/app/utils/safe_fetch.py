@@ -102,6 +102,23 @@ async def assert_public_url(url: str, allowed_hosts: tuple[str, ...]) -> None:
             raise UnsafeURLError(f"Host resolves to a non-public address: {host} -> {addr}")
 
 
+# Request headers that carry credentials; never replayed to a different origin.
+_CREDENTIAL_HEADERS = {"authorization", "proxy-authorization", "cookie"}
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    """(scheme, host, port) of *url*, with the default port made explicit."""
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    return scheme, (parts.hostname or "").lower(), port or _DEFAULT_PORTS.get(scheme)
+
+
 async def safe_download(
     url: str,
     *,
@@ -126,18 +143,32 @@ async def safe_download(
     exploiting the race additionally requires control of a listed provider's
     DNS. Pinning the resolved IP for the actual connection would close the
     race entirely and is the known residual here.
+
+    Credentials stay with the origin they were issued for: once a redirect
+    leaves the original scheme/host/port, credential headers (``Authorization``
+    and friends) are dropped for that hop and every later one. Provider content
+    endpoints redirect to pre-signed CDN URLs that need no token, so a bearer
+    token is never handed to a second host.
     """
     current = url
+    hop_headers = dict(headers) if headers else None
+    origin = _origin(url)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         for _ in range(max_redirects + 1):
             await assert_public_url(current, allowed_hosts)
-            async with client.stream("GET", current, headers=headers) as response:
+            async with client.stream("GET", current, headers=hop_headers) as response:
                 if response.is_redirect:
                     location = response.headers.get("location")
                     if not location:
                         response.raise_for_status()
                         raise UnsafeURLError("Redirect without a Location header")
                     current = str(response.url.join(location))
+                    if hop_headers and _origin(current) != origin:
+                        hop_headers = {
+                            k: v
+                            for k, v in hop_headers.items()
+                            if k.lower() not in _CREDENTIAL_HEADERS
+                        }
                     continue
                 response.raise_for_status()
                 # Enforce declared size early when available.

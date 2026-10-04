@@ -7,6 +7,7 @@ challenge issued by /auth/login plus a TOTP or recovery code, and returns full
 tokens. See app.services.mfa.
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 
@@ -15,9 +16,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.middleware.security import account_lockout, session_manager
+from app.middleware.security import account_lockout
 from app.models.db_models import User as DBUser
-from app.models.responses.auth import LoginResponse, UserInfo
+from app.models.responses.auth import LoginResponse
 from app.models.schemas import (
     MfaDisableRequest,
     MfaEnableRequest,
@@ -28,7 +29,7 @@ from app.models.schemas import (
 )
 from app.services import mfa as mfa_service
 from app.services.audit import AuditEventType, audit_service
-from app.services.auth import TokenData, User, UserRole, auth_service, get_current_user
+from app.services.auth import TokenData, auth_service, get_current_user
 from app.utils.ip_resolution import get_client_ip
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,37 @@ async def _load_user(db: AsyncSession, user_id: str) -> DBUser:
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+
+def _management_lockout_key(user: DBUser) -> str:
+    """Lockout bucket for the authenticated MFA-management endpoints.
+
+    Separate from the login bucket (keyed by the bare email): guessing codes
+    from a hijacked session locks MFA management, not the owner's ability to
+    sign in.
+    """
+    return f"mfa-manage:{user.email}"
+
+
+def _refuse_if_management_locked(user: DBUser) -> None:
+    if account_lockout.is_account_locked(_management_lockout_key(user)):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Try again later.",
+        )
+
+
+async def _record_management_failure(user: DBUser, request: Request, action: str) -> None:
+    """Count a wrong code/password toward the management lockout and audit it."""
+    account_lockout.record_login_failure(_management_lockout_key(user))
+    await audit_service.log_event(
+        event_type=AuditEventType.MFA_FAILURE,
+        user_id=user.id,
+        user_email=user.email,
+        details={"action": action},
+        ip_address=get_client_ip(request),
+        success=False,
+    )
 
 
 @router.get("/status", response_model=MfaStatusResponse)
@@ -91,17 +123,22 @@ async def mfa_enable(
 ) -> MfaEnableResponse:
     """Confirm enrollment with a code, enable MFA, and return recovery codes once."""
     user = await _load_user(db, current_user.user_id)
+    if user.mfa_enabled:
+        raise HTTPException(status_code=409, detail="MFA is already enabled.")
     if not user.mfa_secret:
         raise HTTPException(status_code=400, detail="Start MFA setup first.")
+    _refuse_if_management_locked(user)
 
     secret = mfa_service.decrypt_secret(user.mfa_secret)
     if not mfa_service.verify_totp(secret, body.code):
+        await _record_management_failure(user, request, "enable")
         raise HTTPException(status_code=400, detail="Invalid code. Try again.")
 
     plaintext_codes, hashed_codes = mfa_service.generate_recovery_codes()
     user.mfa_enabled = True
     user.mfa_recovery_codes = hashed_codes
     await db.commit()
+    account_lockout.clear_account_lockout(_management_lockout_key(user))
 
     await audit_service.log_event(
         event_type=AuditEventType.MFA_ENABLED,
@@ -119,25 +156,44 @@ async def mfa_disable(
     current_user: TokenData = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Disable MFA after proving a current TOTP or recovery code."""
+    """Disable MFA after proving the password AND a current TOTP or recovery code.
+
+    Both are required so that a hijacked session alone — which holds neither —
+    cannot remove the second factor. Accounts without a local password (SSO)
+    prove the code only.
+    """
+    from app.services.passwords import verify_password
+
     user = await _load_user(db, current_user.user_id)
     if not user.mfa_enabled or not user.mfa_secret:
         return {"status": "mfa_not_enabled"}
+    _refuse_if_management_locked(user)
+
+    if user.password_hash:
+        if not body.password:
+            raise HTTPException(
+                status_code=400, detail="Your current password is required to disable MFA."
+            )
+        if not await asyncio.to_thread(verify_password, body.password, user.password_hash):
+            await _record_management_failure(user, request, "disable_wrong_password")
+            raise HTTPException(status_code=400, detail="Invalid password or code.")
 
     secret = mfa_service.decrypt_secret(user.mfa_secret)
-    ok = mfa_service.verify_totp(secret, body.code)
+    ok = mfa_service.verify_totp_once(user.id, secret, body.code)
     if not ok:
         consumed, _remaining = mfa_service.consume_recovery_code(
             body.code, user.mfa_recovery_codes or []
         )
         ok = consumed
     if not ok:
-        raise HTTPException(status_code=400, detail="Invalid code.")
+        await _record_management_failure(user, request, "disable_invalid_code")
+        raise HTTPException(status_code=400, detail="Invalid password or code.")
 
     user.mfa_enabled = False
     user.mfa_secret = None
     user.mfa_recovery_codes = None
     await db.commit()
+    account_lockout.clear_account_lockout(_management_lockout_key(user))
 
     await audit_service.log_event(
         event_type=AuditEventType.MFA_DISABLED,
@@ -163,14 +219,17 @@ async def mfa_regenerate_recovery_codes(
     user = await _load_user(db, current_user.user_id)
     if not user.mfa_enabled or not user.mfa_secret:
         raise HTTPException(status_code=400, detail="MFA is not enabled.")
+    _refuse_if_management_locked(user)
 
     secret = mfa_service.decrypt_secret(user.mfa_secret)
-    if not mfa_service.verify_totp(secret, body.code):
+    if not mfa_service.verify_totp_once(user.id, secret, body.code):
+        await _record_management_failure(user, request, "recovery_codes")
         raise HTTPException(status_code=400, detail="Invalid code.")
 
     plaintext_codes, hashed_codes = mfa_service.generate_recovery_codes()
     user.mfa_recovery_codes = hashed_codes
     await db.commit()
+    account_lockout.clear_account_lockout(_management_lockout_key(user))
 
     await audit_service.log_event(
         event_type=AuditEventType.MFA_ENABLED,
@@ -190,7 +249,7 @@ async def mfa_verify(
     db: AsyncSession = Depends(get_db),
 ) -> LoginResponse:
     """Second login step: exchange the MFA challenge + code for tokens."""
-    from app.routers.auth import _set_auth_cookies
+    from app.routers.auth import start_session, user_from_row, user_info
 
     user_id = mfa_service.verify_challenge_token(body.mfa_token)
     if not user_id:
@@ -202,7 +261,8 @@ async def mfa_verify(
 
     # Per-account brute-force brake: failed second-factor attempts count toward
     # the same lockout as failed passwords, so a stolen password can't be paired
-    # with distributed TOTP guessing across many IPs.
+    # with distributed TOTP guessing across many IPs. /auth/login does not clear
+    # this counter for MFA accounts — only a completed sign-in (below) does.
     if account_lockout.is_account_locked(user_row.email):
         raise HTTPException(
             status_code=429,
@@ -211,7 +271,7 @@ async def mfa_verify(
 
     secret = mfa_service.decrypt_secret(user_row.mfa_secret)
     used_recovery = False
-    if not mfa_service.verify_totp(secret, body.code):
+    if not mfa_service.verify_totp_once(user_row.id, secret, body.code):
         consumed, remaining = mfa_service.consume_recovery_code(
             body.code, user_row.mfa_recovery_codes or []
         )
@@ -235,22 +295,11 @@ async def mfa_verify(
     if not mfa_service.consume_challenge_token(body.mfa_token):
         raise HTTPException(status_code=401, detail="MFA session expired. Please sign in again.")
 
-    user = User(
-        id=user_row.id,
-        email=user_row.email,
-        name=user_row.name or "",
-        roles=[UserRole(r) for r in (user_row.roles or ["attorney"])],
-        last_login=datetime.now(UTC),
-    )
-    access_token = auth_service.create_access_token(user)
-    refresh_token = auth_service.create_refresh_token(user)
-    token_data = auth_service.verify_token(access_token)
-    session_manager.create_session(
-        user_id=user.id,
-        ip_address=get_client_ip(request),
-        user_agent=request.headers.get("user-agent", ""),
-        jti=token_data.jti,
-    )
+    user_row.last_login = datetime.now(UTC).replace(tzinfo=None)
+    await db.commit()
+
+    user = user_from_row(user_row)
+    access_token = start_session(request, response, user)
     account_lockout.clear_account_lockout(user.email)
 
     await audit_service.log_event(
@@ -261,14 +310,8 @@ async def mfa_verify(
         ip_address=get_client_ip(request),
     )
 
-    _set_auth_cookies(request, response, access_token, refresh_token)
     return LoginResponse(
         access_token=access_token,
         expires_in=int(auth_service.access_token_expire.total_seconds()),
-        user=UserInfo(
-            id=user.id,
-            email=user.email,
-            name=user.name,
-            roles=[r.value for r in user.roles],
-        ),
+        user=user_info(user, user_row),
     )

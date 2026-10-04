@@ -76,3 +76,33 @@ class TestRefreshCookieScope:
         # Both the current path and the pre-broadening path must be cleared so
         # sessions issued before the change don't keep a stale cookie.
         assert refresh_paths == {"/api/v1/auth", "/api/v1/auth/refresh"}
+
+
+class TestCookieSecureFlag:
+    """Production always sets Secure, whatever the forwarded-proto header says."""
+
+    @staticmethod
+    def _secure_flags(request: Request) -> dict[str, bool]:
+        response = Response()
+        _set_auth_cookies(request, response, "access-tok", "refresh-tok")
+        flags = {}
+        for cookie in _cookies_from(response):
+            for name, morsel in cookie.items():
+                flags[name] = bool(morsel["secure"])
+        return flags
+
+    def test_production_sets_secure_over_plain_http_hop(self):
+        """Behind a proxy hop that reports http (nginx overwriting
+        X-Forwarded-Proto with its own scheme), the flag must not be lost."""
+        from unittest.mock import patch
+
+        from app.config import settings
+
+        production = settings.model_copy(update={"debug": False})
+        with patch("app.middleware.csrf.settings", production):
+            flags = self._secure_flags(_make_request())
+        assert flags == {"access_token": True, "refresh_token": True}
+
+    def test_development_over_http_stays_usable(self):
+        flags = self._secure_flags(_make_request())
+        assert flags == {"access_token": False, "refresh_token": False}
