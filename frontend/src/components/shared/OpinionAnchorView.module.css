@@ -1,0 +1,43 @@
+.wrap { display: flex; flex-direction: column; gap: 8px; }
+.state { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--gray-500); padding: 12px; }
+.error { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--red-700); background: var(--red-50); padding: 10px 12px; border-radius: 8px; }
+.spin { animation: oavSpin 0.8s linear infinite; }
+@keyframes oavSpin { to { transform: rotate(360deg); } }
+
+.head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.caseName { font-size: 13px; font-weight: 700; color: var(--navy-900); }
+.foundBadge, .notFoundBadge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px;
+}
+.foundBadge { background: var(--green-100); color: var(--green-700); }
+.notFoundBadge { background: var(--amber-100); color: var(--amber-800); }
+.fullBtn {
+  margin-left: auto;
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 9px; border: 1px solid var(--gray-300); border-radius: 7px;
+  background: white; color: var(--navy-900); font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.fullBtn:hover { background: var(--gray-50); }
+
+.opinion {
+  max-height: 340px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Georgia', 'Times New Roman', serif;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--gray-800);
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+.mark {
+  background: rgba(34, 197, 94, 0.3);
+  border-bottom: 2px solid var(--green-600);
+  border-radius: 2px;
+  padding: 1px 0;
+  scroll-margin: 60px;
+}

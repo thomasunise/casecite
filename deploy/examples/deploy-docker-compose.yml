@@ -1,0 +1,99 @@
+# Docker Compose VPS Deploy
+#
+# SSHs into a VPS and deploys the exact image CI just built for this commit
+# (pinned by SHA, so every deploy is reproducible and every previous deploy is a
+# one-line rollback). Works with any VPS provider.
+#
+# Setup:
+#   1. Copy this file to .github/workflows/deploy-docker-compose.yml
+#   2. In GitHub: Settings → Environments → create "production"
+#   3. Add the secrets listed below to the "production" environment
+#   4. On the VPS: clone the repo (or just copy docker-compose.prod.yml,
+#      Caddyfile and .env) to /opt/casecite and set CASECITE_IMAGE in .env if
+#      your image is not ghcr.io/thomasunise/casecite
+#
+# Required GitHub Secrets (in "production" environment):
+#   DEPLOY_HOST       — VPS IP or hostname
+#   DEPLOY_USER       — SSH user (e.g. root or deploy)
+#   DEPLOY_SSH_KEY    — private SSH key (ed25519 or RSA)
+#   DEPLOY_HOST_FINGERPRINT — the server's SSH host-key fingerprint, so the
+#                       job refuses to send the key to an impostor host. Get it
+#                       on the VPS with:
+#                         ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub | cut -d ' ' -f2
+#   GHCR_PULL_TOKEN   — a GitHub PAT with ONLY read:packages, used to `docker
+#                       login` on the VPS. Never forward GITHUB_TOKEN into a
+#                       remote shell: it ends up in shell history and has
+#                       far broader scope. Not needed if the package is public.
+#
+# Rollback: on the VPS, `CASECITE_TAG=<previous-sha> docker compose -f
+# docker-compose.prod.yml up -d` (then put that tag in .env to make it stick).
+
+name: Deploy to VPS
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy via SSH
+    runs-on: ubuntu-latest
+    # Only a successful CI run for a PUSH to this repository's main branch
+    # deploys. Without the event check, a pull request from a fork whose branch
+    # happens to be named "main" also matches the branch filter above.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
+    environment: production
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2  # v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          fingerprint: ${{ secrets.DEPLOY_HOST_FINGERPRINT }}
+          # CI tags the image with the full commit SHA (see ci.yml metadata step).
+          envs: TAG,GHCR_USER,GHCR_PULL_TOKEN
+          script: |
+            set -e
+            cd /opt/casecite
+
+            # The tag is written into .env below: accept a full commit SHA only.
+            echo "$TAG" | grep -Eq '^[0-9a-f]{40}$' || { echo "refusing to deploy: '$TAG' is not a commit SHA"; exit 1; }
+
+            if [ -n "$GHCR_PULL_TOKEN" ]; then
+              echo "$GHCR_PULL_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            fi
+
+            # Pin this deploy to the commit CI just built, and record it in
+            # .env so later `up -d` invocations keep the same tag.
+            if grep -q '^CASECITE_TAG=' .env; then
+              sed -i "s/^CASECITE_TAG=.*/CASECITE_TAG=$TAG/" .env
+            else
+              echo "CASECITE_TAG=$TAG" >> .env
+            fi
+
+            docker compose -f docker-compose.prod.yml pull backend frontend-build
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+            # Wait for the backend healthcheck before calling it done.
+            for i in $(seq 1 30); do
+              status=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose -f docker-compose.prod.yml ps -q backend)")
+              [ "$status" = "healthy" ] && break
+              sleep 5
+            done
+            [ "$status" = "healthy" ] || { echo "backend did not become healthy"; docker compose -f docker-compose.prod.yml logs --tail=100 backend; exit 1; }
+
+            # Keep the two previous images around for rollback; prune the rest.
+            docker image prune -f --filter "until=168h"
+
+            echo "Deployed $TAG"
+        env:
+          TAG: ${{ github.event.workflow_run.head_sha }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}

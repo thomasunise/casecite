@@ -1,0 +1,101 @@
+.card {
+  padding: 12px 14px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.severityChip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sevCritical {
+  background: var(--red-50);
+  color: var(--red-600);
+}
+
+.sevMajor {
+  background: var(--amber-50);
+  color: var(--amber-600);
+}
+
+.sevMinor {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-900);
+}
+
+.unverifiedTag {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--gray-500);
+}
+
+.why {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-800);
+}
+
+.quote {
+  margin: 8px 0 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--gold-600);
+  background: var(--gray-50);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  font-style: italic;
+  color: var(--gray-700);
+}
+
+.absenceNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.suggestion {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+}
+
+.suggestionLabel {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  margin-bottom: 4px;
+}
+
+.suggestionText {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--gray-800);
+  white-space: pre-wrap;
+}

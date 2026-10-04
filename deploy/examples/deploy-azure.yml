@@ -1,0 +1,70 @@
+# Azure Container Apps Deploy
+#
+# Logs into Azure and updates the Container App to the image CI just built for
+# this commit (pinned by SHA, so a deploy is reproducible and a rollback is
+# `az containerapp update --image ghcr.io/<repo>:<older-sha>`).
+# Deploys the GHCR image to an existing Azure Container Apps environment.
+#
+# Setup:
+#   1. Copy this file to .github/workflows/deploy-azure.yml
+#   2. In GitHub: Settings → Environments → create "production"
+#   3. Add the secrets listed below to the "production" environment
+#   4. Provision the Container Apps environment and its dependencies first
+#
+# Required GitHub Secrets (in "production" environment):
+#   AZURE_CLIENT_ID       — service principal or managed identity client ID
+#   AZURE_TENANT_ID       — Azure AD tenant ID
+#   AZURE_SUBSCRIPTION_ID — Azure subscription ID
+#   AZURE_RESOURCE_GROUP  — resource group name (e.g. rg-casecite-prod)
+#   AZURE_APP_NAME        — Container App name (e.g. ca-casecite-prod-api)
+#
+# Authentication uses Workload Identity Federation (OIDC) — no secrets stored.
+# See: https://learn.microsoft.com/en-us/azure/developer/github/connect-from-azure
+
+name: Deploy to Azure
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Azure Container Apps
+    runs-on: ubuntu-latest
+    # Only a successful CI run for a PUSH to this repository's main branch
+    # deploys. Without the event check, a pull request from a fork whose branch
+    # happens to be named "main" also matches the branch filter above.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
+    environment: production
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6  # v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name "${{ secrets.AZURE_APP_NAME }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --image "ghcr.io/${{ github.repository }}:${{ github.event.workflow_run.head_sha }}"
+
+      - name: Verify deployment
+        run: |
+          az containerapp show \
+            --name "${{ secrets.AZURE_APP_NAME }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.runningStatus" \
+            --output tsv

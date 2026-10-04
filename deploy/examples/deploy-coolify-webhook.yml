@@ -1,0 +1,44 @@
+# Coolify Webhook Deploy
+#
+# Triggers after the CI pipeline pushes a new image to GHCR.
+# Coolify redeploys the resource when it receives the webhook. Which image it
+# runs is set in Coolify: point the resource at a commit-SHA tag (or have it
+# build from the repository) rather than the mutable :latest if you need
+# reproducible deploys and rollbacks.
+#
+# Setup:
+#   1. Copy this file to .github/workflows/deploy-coolify-webhook.yml
+#   2. In Coolify: open your resource → Settings → copy the Webhook URL
+#   3. In GitHub: Settings → Secrets → add COOLIFY_WEBHOOK_URL
+#
+# Required GitHub Secrets:
+#   COOLIFY_WEBHOOK_URL — the deploy webhook from Coolify resource settings
+
+name: Deploy to Coolify
+
+on:
+  workflow_run:
+    workflows: ["CI/CD Pipeline"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Trigger Coolify Deploy
+    runs-on: ubuntu-latest
+    # Only a successful CI run for a PUSH to this repository's main branch
+    # deploys. Without the event check, a pull request from a fork whose branch
+    # happens to be named "main" also matches the branch filter above.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_repository.full_name == github.repository }}
+
+    steps:
+      - name: Trigger Coolify webhook
+        run: |
+          curl -fsSL "${{ secrets.COOLIFY_WEBHOOK_URL }}" \
+            --max-time 30 \
+            --retry 3 \
+            --retry-delay 5
+          echo "Coolify deploy triggered successfully"

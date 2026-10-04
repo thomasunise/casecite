@@ -1,0 +1,1111 @@
+/* RightPanel layout & structure */
+.rightPanel {
+  width: 280px;
+  background: white;
+  border-left: 1px solid var(--gray-200);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  transition: width 0.2s ease;
+  position: relative;
+}
+
+.rightPanelCollapsed {
+  width: 52px;
+}
+
+/* Collapse toggle button */
+.collapseToggle {
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 48px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  box-shadow: -2px 0 8px rgba(0, 0, 0, 0.08);
+}
+
+/* Collapsed icon view */
+.collapsedView {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 8px;
+  gap: 8px;
+}
+
+.collapsedBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  background: var(--gray-100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.collapsedBtnActive {
+  background: var(--gold-100);
+}
+
+.collapsedDivider {
+  height: 1px;
+  width: 24px;
+  background: var(--gray-200);
+  margin: 4px 0;
+}
+
+.collapsedCount {
+  font-size: 11px;
+  color: var(--gray-500);
+  text-align: center;
+}
+
+/* Tab bar */
+.tabBar {
+  display: flex;
+  border-bottom: 1px solid var(--gray-200);
+  padding: 0 12px;
+}
+
+/* Right panel content area */
+.rightContent {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+
+/* Right section */
+.rightSection {
+  margin-bottom: 20px;
+}
+
+.rightSectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-500);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+}
+
+/* Empty panel */
+.emptyPanel {
+  padding: 20px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+.emptyPanelDesc {
+  font-size: 11px;
+  color: var(--gray-400);
+  margin-top: 4px;
+}
+
+
+.toolCard {
+  display: flex;
+  flex-direction: column;
+  padding: 12px 14px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: all 0.15s;
+  position: relative;
+}
+
+
+.toolInput {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  outline: none;
+}
+
+
+.toolErrorBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--red-50);
+  color: var(--red-600);
+  border-radius: 6px;
+  font-size: 11px;
+  margin-bottom: 12px;
+}
+
+
+/* CourtListener API slow warning */
+.apiSlowWarning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--amber-50);
+  color: var(--amber-700);
+  border-radius: 8px;
+  font-size: 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--amber-200);
+  animation: fadeIn 0.3s ease;
+}
+
+.apiSlowTitle {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+/* Case search results */
+.caseSearchResults {
+  display: flex;
+  flex-direction: column;
+}
+
+.searchResultsHeader {
+  display: flex;
+  justify-content: space-between;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-bottom: 8px;
+}
+
+.searchResultsPage {
+  color: var(--gray-400);
+}
+
+.caseResultsList {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.caseResultItem {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--gray-100);
+  cursor: pointer;
+  position: relative;
+}
+
+.caseResultItem:last-child {
+  border-bottom: none;
+}
+
+.caseResultItem:hover .caseResultName {
+  color: var(--primary);
+}
+
+.caseResultContent {
+  flex: 1;
+  cursor: pointer;
+}
+
+.caseResultName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-900);
+  margin-bottom: 3px;
+  line-height: 1.4;
+  transition: color 0.12s;
+}
+
+.caseResultMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-bottom: 3px;
+}
+
+.caseResultCitation {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-600);
+}
+
+.loadMoreBtn {
+  padding: 9px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 12px;
+  width: 100%;
+}
+
+
+/* Case detail view */
+.caseDetailView {
+  composes: toolCard;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.backToResultsBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  background: var(--gray-100);
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--gray-600);
+  cursor: pointer;
+  margin-bottom: 12px;
+  width: fit-content;
+}
+
+.caseLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 40px;
+  color: var(--gray-500);
+  font-size: 12px;
+}
+
+.caseDetailTitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--navy-800);
+  margin: 0 0 12px;
+  line-height: 1.3;
+}
+
+.caseDetailMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--gray-500);
+  margin-bottom: 12px;
+}
+
+.caseDetailCitations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.caseDetailCite {
+  padding: 3px 9px;
+  background: var(--gold-50);
+  color: var(--gold-700);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.caseDetailJudges {
+  font-size: 12px;
+  color: var(--gray-600);
+  margin-bottom: 14px;
+}
+
+
+/* Case detail sections */
+.caseDetailSection {
+  margin-bottom: 22px;
+}
+
+.caseDetailSectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--navy-700);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.caseDetailText {
+  font-size: 13px;
+  color: var(--gray-700);
+  line-height: 1.7;
+}
+
+/* The opinion IS the page: full reading size, flows with the page scroll —
+   never a small inner scrollbox. */
+.caseOpinionText {
+  font-size: 14px;
+  color: var(--gray-800);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  font-family: Georgia, serif;
+}
+
+/* Citation validation — same house card as every other tool */
+.resultCard {
+  composes: toolCard;
+}
+
+.validationCaseName {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--navy-900);
+  margin-bottom: 4px;
+}
+
+.validationCitation {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-600);
+}
+
+.validationCaseLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--navy-800);
+  text-decoration: none;
+}
+.validationCaseLink:hover {
+  text-decoration: underline;
+}
+
+.validationBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+/* Same construction as the Judge Intel header metrics band */
+.validationGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  border-top: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-200);
+  padding: 4px 0;
+}
+
+.validationItem {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 14px;
+}
+
+.validationItem + .validationItem {
+  border-left: 1px solid var(--gray-200);
+}
+
+.validationLabel {
+  display: block;
+  order: 2;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+}
+
+.validationValue {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--navy-900);
+}
+
+.validationValuePositive {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--green-600);
+}
+
+.validationValueNegative {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--red-600);
+}
+
+/* Analysis notes */
+.analysisNotes {
+  margin-top: 16px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-300);
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.analysisNotesTitle {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  margin-bottom: 8px;
+}
+
+.analysisNote {
+  color: var(--gray-800);
+  margin-bottom: 4px;
+}
+
+/* Generic result rows — hairline-separated, house typography */
+.resultsList {
+}
+
+.resultsCount {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-bottom: 8px;
+}
+
+.resultRow {
+  display: flex;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.resultRow:last-child {
+  border-bottom: none;
+}
+
+/* Clickable result row (opens the case/docket on CourtListener) */
+.resultRowLink {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.resultRowLink:hover .resultRowTitle {
+  color: var(--primary);
+}
+.resultRowLinkIcon {
+  color: var(--gray-400);
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+.resultRowLink:hover .resultRowLinkIcon {
+  color: var(--navy-800);
+}
+
+.resultRank {
+  width: 18px;
+  flex-shrink: 0;
+  margin-right: 12px;
+  text-align: right;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gray-400);
+}
+
+.resultRowContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.resultRowTitle {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--navy-900);
+  line-height: 1.4;
+  transition: color 0.12s;
+}
+
+.resultRowMeta {
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 3px;
+}
+
+/* ===== House card — EVERY legal-tool result renders inside this exact
+   construction (same language as the citation popup and Judge Intel):
+   white hairline card, overline, title, hairline rows. ===== */
+.toolCard {
+  max-width: 720px;
+  margin: 0 auto;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 14px;
+  padding: 20px 24px;
+}
+
+.toolOverline {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-700);
+  margin-bottom: 4px;
+}
+
+.toolTitle {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--navy-900);
+  margin-bottom: 14px;
+}
+
+/* Trends chart lives in the same house card */
+.trendCard {
+  composes: toolCard;
+}
+
+.trendOverline {
+  composes: toolOverline;
+}
+
+.trendTitle {
+  composes: toolTitle;
+}
+
+/* Same construction as the judge-intel header metrics band */
+.trendStatsRow {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--gray-200);
+  border-bottom: 1px solid var(--gray-200);
+  padding: 4px 0;
+  margin-bottom: 18px;
+}
+
+.trendStat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 14px;
+}
+
+.trendStat + .trendStat {
+  border-left: 1px solid var(--gray-200);
+}
+
+.trendStatValue {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--navy-900);
+  display: flex;
+  align-items: center;
+}
+
+.trendStatLabel {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+}
+
+.trendBars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 128px;
+  /* headroom above for the hover tooltip; room below for the year labels */
+  margin-top: 30px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.trendBarCol {
+  position: relative;
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.trendBarFill {
+  width: 100%;
+  max-width: 22px;
+  background: var(--navy-700);
+  border-radius: 4px 4px 0 0;
+  transition: background 0.12s;
+}
+
+.trendBarFillActive {
+  min-height: 2px;
+}
+
+.trendBarCol:hover .trendBarFill {
+  background: var(--navy-900);
+}
+
+.trendBarYear {
+  position: absolute;
+  top: 100%;
+  margin-top: 5px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  color: var(--gray-500);
+  white-space: nowrap;
+}
+
+.trendTip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 9px;
+  background: var(--navy-900);
+  color: var(--on-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  z-index: 2;
+}
+
+.trendBarCol:hover .trendTip {
+  opacity: 1;
+}
+
+.trendNote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 26px;
+  font-size: 11px;
+  color: var(--gray-500);
+}
+
+/* Oral arguments — hairline rows like every other tool list */
+.oralArgItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.oralArgItem:last-child {
+  border-bottom: none;
+}
+
+.audioPlayer {
+  width: 100%;
+  height: 32px;
+}
+
+.oralArgLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+/* Results list group — scrolling is owned by the view's outer container */
+.scrollableList {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sources — editorial citation list: typographic, hairline rules, no chrome.
+   Case names set in an italic serif (legal citation convention); metadata in
+   quiet letterspaced small caps. Hover is a calm reading-list tint. */
+.sourcesList {
+  display: flex;
+  flex-direction: column;
+}
+
+.sourceItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--gray-200);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.sourceItem:last-child {
+  border-bottom: none;
+}
+
+.sourceItem:hover {
+  background: var(--gray-50);
+}
+
+.sourceContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.sourceName {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  color: var(--navy-900);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sourceMeta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 3px;
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--gray-500);
+}
+
+/* Short vertical hairline between metadata segments */
+.sourceMetaRule {
+  width: 1px;
+  height: 9px;
+  background: var(--gray-300);
+}
+
+.sourceCited {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--green-700);
+  font-weight: 600;
+}
+
+/* Binary verification badges — never scores or match-strength gradients. */
+.verifiedBadge { color: #047857; font-weight: 700; }
+.unverifiedBadge { color: var(--amber-700); font-weight: 700; }
+/* Retrieved below the user's similarity threshold — a quiet flag, not a score. */
+.weakMatch { color: var(--gray-500); font-style: italic; }
+
+.sourceLink {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  color: var(--gray-400);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+
+.sourceItem:hover .sourceLink {
+  opacity: 1;
+}
+
+.sourceLink:hover {
+  color: var(--navy-900);
+}
+
+/* History */
+.historyList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.newChatBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: transparent;
+  border: 1px dashed var(--gray-300);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gray-600);
+}
+
+.newChatBtn:hover {
+  border-color: var(--gray-400);
+  color: var(--gray-800);
+}
+
+.historyRow {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.historyItemActive {
+  outline: 1px solid var(--gray-300);
+  background: var(--gray-100);
+}
+
+.historyDeleteBtn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--gray-400);
+}
+
+.historyDeleteBtn:hover {
+  background: var(--gray-100);
+  color: var(--red-600, #dc2626);
+}
+
+.historyItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px;
+  background: var(--gray-50);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+
+.historyContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.historyQuery {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gray-800);
+  line-height: 1.3;
+  word-break: break-word;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-height: 2.6em;
+}
+
+.historyMeta {
+  font-size: 10px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+
+/* Icon color utilities */
+.iconGray500 {
+  color: var(--gray-500);
+}
+
+.iconGray400 {
+  color: var(--gray-400);
+}
+
+.iconGray300 {
+  color: var(--gray-300);
+}
+
+.iconGold600 {
+  color: var(--gold-600);
+}
+
+
+/* Lock icon positioning */
+.lockIcon {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: var(--gold-600);
+}
+
+/* Spinner animation */
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+/* API slow icon */
+.apiSlowIcon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  animation: pulse 2s infinite;
+}
+
+/* Empty panel icon */
+.emptyPanelIcon {
+  color: var(--gray-300);
+  margin-bottom: 8px;
+}
+
+/* Validation badge margin wrapper */
+.validationBadgeWrapper {
+  margin-bottom: 16px;
+}
+
+/* Validation badge warning levels */
+.validationBadgeNone {
+  background: var(--green-100);
+  color: var(--green-700);
+}
+
+.validationBadgeCaution {
+  background: var(--amber-100);
+  color: var(--amber-700);
+}
+
+.validationBadgeWarning {
+  background: var(--orange-100);
+  color: var(--orange-700);
+}
+
+.validationBadgeDanger {
+  background: var(--red-100);
+  color: var(--red-700);
+}
+
+.validationBadgeUnknown {
+  background: var(--gray-100);
+  color: var(--gray-700);
+}
+
+/* What the scan actually is — shown under every badge, not buried in notes */
+.validationMethod {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin: -8px 0 14px;
+}
+
+/* Numbered rows matched to the chat's source pills */
+.sourceNum {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--gray-500);
+  flex-shrink: 0;
+}
+
+/* Spotlit while its pill is hovered in the conversation */
+.sourceItemHot {
+  background: var(--gray-100);
+}
+
+.sourceItemHot .sourceNum {
+  border-color: var(--navy-800);
+  color: var(--navy-900);
+}
+
+/* ── In-app case/docket reader sizing ─────────────────────────────
+   .caseDetailView composes .toolCard, whose 720px/20px block is declared
+   later in this file and wins on source order — so the reading-column
+   override must live down here. Same column as the Case page opinion. */
+.caseDetailView {
+  max-width: 860px;
+  padding: 28px 36px 36px;
+  /* It's a page, not a clickable card: no pointer cursor, and the PAGE
+     scrolls — never a nested scrollbox. */
+  cursor: default;
+  overflow: visible;
+}
+
+.caseDetailView .backToResultsBtn {
+  font-size: 12px;
+  padding: 7px 12px;
+  margin-bottom: 16px;
+}
+
+.caseDetailView .caseLoading {
+  font-size: 13px;
+}
+
+/* Matching passage / opening text under a result row */
+.resultSnippet {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--gray-700);
+}
+
+.caseResultItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.caseResultContent { flex: 1; min-width: 0; }
+.caseResultLink {
+  flex: none;
+  display: inline-flex;
+  padding: 2px;
+  color: var(--gray-400);
+}
+.caseResultLink:hover { color: var(--gray-700); }
+
+.oralArgLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+/* The year still in progress: shown, not counted toward the trend */
+.trendBarFillPartial {
+  opacity: 0.45;
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 3px,
+    rgba(255, 255, 255, 0.5) 3px 5px
+  );
+}

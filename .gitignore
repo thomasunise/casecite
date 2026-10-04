@@ -1,0 +1,72 @@
+# Environment files with secrets
+.env
+.env.local
+.env.production
+
+# Data directories
+data/
+backend/data/
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Testing & Coverage
+.coverage
+htmlcov/
+coverage.xml
+.pytest_cache/
+
+# Node / Frontend
+frontend/node_modules/
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Logs
+*.log
+logs/
+
+# Docker
+*.tar
+
+# Backups written by scripts/backup_database.sh (database dumps and data
+# archives contain client data, password hashes and the key store)
+backups/
+*.sql.gz*
+*.tar.gz*
+
+# User settings (runtime data)
+user_settings/
+
+# Keep example env files
+!.env.example
+
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/coverage/
+
+*.tsbuildinfo
+
+# Claude Code local settings
+.claude/

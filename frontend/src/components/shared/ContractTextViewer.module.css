@@ -1,0 +1,517 @@
+.viewer {
+  width: 100%;
+  /* Same reading column as the Matter Strategy workspace and the case
+     reader — a document is never a full-width sheet. */
+  max-width: 860px;
+  margin: 0 auto 18px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--gray-200);
+  flex-shrink: 0;
+}
+
+.headerIcon {
+  color: var(--gray-500);
+  flex-shrink: 0;
+}
+
+.filename {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gray-900);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.highlightCount {
+  font-size: 11px;
+  color: var(--gray-500);
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+.closeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-500);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.closeBtn:hover {
+  background: var(--gray-100);
+  color: var(--gray-700);
+}
+
+.body {
+  padding: 26px 34px 30px;
+  position: relative;
+  /* No nested scrolling: the contract flows with the workspace's single
+     scroll surface. The collapse chevron shrinks it when the conversation
+     should lead. */
+}
+
+.selectionMenu {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--gray-900);
+  border-radius: 9px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.selectionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.selectionBtn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.text {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 13.5px;
+  line-height: 1.75;
+  color: var(--gray-900);
+  word-break: break-word;
+  max-width: 760px;
+  margin: 0 auto;
+}
+
+.heading {
+  font-weight: 700;
+  font-size: 13.5px;
+  letter-spacing: 0.02em;
+  margin: 20px 0 6px;
+  color: var(--gray-900);
+}
+
+.heading:first-child {
+  margin-top: 0;
+}
+
+.para {
+  margin: 0 0 12px;
+  text-align: justify;
+}
+
+.mark {
+  background: var(--amber-100);
+  border-bottom: 2px solid var(--amber-500);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.markFlash {
+  background: var(--amber-200);
+  border-bottom: 2px solid var(--amber-600);
+  border-radius: 2px;
+  padding: 0 1px;
+  animation: ctvFlash 0.55s ease-in-out 2;
+}
+
+@keyframes ctvFlash {
+  50% { background: var(--amber-500); }
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gray-500);
+  font-size: 13px;
+  padding: 24px 0;
+}
+
+.spin {
+  animation: ctvSpin 1s linear infinite;
+}
+
+@keyframes ctvSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ===== Inline redline marks ===== */
+.redlineMark {
+  background: var(--red-50);
+  color: var(--red-700);
+  text-decoration: line-through;
+  text-decoration-color: var(--red-500);
+  border-bottom: 2px solid var(--red-500);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.redlineMarkActive {
+  background: var(--red-100);
+  color: var(--red-700);
+  text-decoration: line-through;
+  text-decoration-color: var(--red-600);
+  border-bottom: 2px solid var(--red-600);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+  outline: 2px solid var(--gray-900);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px rgba(200, 16, 46, 0.12);
+}
+
+.proposedInlineActive {
+  background: var(--green-100);
+  color: var(--green-700);
+  text-decoration: none;
+  border-bottom: 2px solid var(--green-600);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+  outline: 2px solid var(--gray-900);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 5px rgba(22, 163, 74, 0.14);
+}
+
+.redlineRejected {
+  background: transparent;
+  color: inherit;
+  border-bottom: 2px dotted var(--gray-300);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+.proposedInline {
+  background: var(--green-50);
+  color: var(--green-700);
+  text-decoration: none;
+  border-bottom: 2px solid var(--green-500);
+  border-radius: 2px;
+  padding: 0 1px;
+  cursor: pointer;
+}
+
+
+
+.insertRowText {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ===== Redline popover ===== */
+.redlinePopover,
+.redlinePopoverDragged {
+  position: absolute;
+  z-index: 40;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, calc(100% - 32px));
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.18);
+  padding: 12px 14px;
+  font-family: 'Inter', sans-serif;
+}
+
+.redlinePopoverDragged {
+  left: 0;
+  transform: none;
+}
+
+.popoverHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.popoverHead:active {
+  cursor: grabbing;
+}
+
+.dragGrip {
+  color: var(--gray-400);
+  flex-shrink: 0;
+}
+
+.popoverTitle {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gray-900);
+}
+
+.popoverSource {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--gray-500);
+  margin: 7px 0 0;
+}
+
+.popoverWhy {
+  font-size: 12px;
+  color: var(--gray-600);
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+.popoverProposed {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: var(--green-50);
+  border-left: 3px solid var(--green-500);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--gray-800);
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.popoverActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.acceptBtn, .acceptBtnActive, .rejectBtn, .rejectBtnActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 7px;
+  cursor: pointer;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+}
+
+.acceptBtnActive {
+  background: var(--green-50);
+  border-color: var(--green-500);
+  color: var(--green-700);
+}
+
+.rejectBtnActive {
+  background: var(--red-50);
+  border-color: var(--red-500);
+  color: var(--red-700);
+}
+
+.sevChip {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  flex-shrink: 0;
+}
+
+.sev_critical { background: var(--red-50); color: var(--red-600); }
+.sev_major { background: var(--amber-50); color: var(--amber-600); }
+
+/* ===== Header toggles ===== */
+.headerToggle, .headerToggleActive {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.headerToggleActive {
+  border-color: var(--green-500);
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.headerToggle:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Native document render (real formatting) — the Text view stays the working
+   surface for selections, highlights, and redlines */
+.viewToggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--gray-300);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+
+.viewToggleBtn,
+.viewToggleActive {
+  padding: 3px 10px;
+  font-size: 10.5px;
+  font-weight: 500;
+  border: none;
+  background: white;
+  color: var(--gray-500);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.viewToggleActive {
+  background: var(--gray-100);
+  color: var(--gray-800);
+  font-weight: 600;
+}
+
+.docRender {
+  height: min(74vh, 900px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Hand-editing: proposed wording + whole-text working copy ── */
+
+.popoverProposedEdit {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--green-500);
+  border-radius: 8px;
+  background: var(--green-50);
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--gray-900);
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+
+.popoverEditActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.popoverEditBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  font-weight: 600;
+  border: 1px solid var(--green-500);
+  border-radius: 9999px;
+  background: white;
+  color: var(--green-700);
+  cursor: pointer;
+}
+
+.popoverEditSave {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  border-radius: 9999px;
+  background: var(--green-600);
+  color: white;
+  cursor: pointer;
+}
+
+.popoverEditCancel {
+  padding: 5px 14px;
+  font-size: 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 9999px;
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+}
+
+.textEditWrap {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px 14px;
+  gap: 10px;
+}
+
+.textEditArea {
+  width: 100%;
+  min-height: min(62vh, 700px);
+  padding: 16px 18px;
+  border: 1px solid var(--gray-300);
+  border-radius: 10px;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.65;
+  color: var(--gray-900);
+  background: white;
+  resize: vertical;
+  outline: none;
+}
+
+.textEditArea:focus {
+  border-color: var(--gray-500);
+}
+
+.textEditBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.textEditHint {
+  flex: 1;
+  font-size: 11px;
+  color: var(--gray-400);
+}

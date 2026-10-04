@@ -1,0 +1,62 @@
+.table {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.fieldLabel {
+  width: 160px;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--gray-600);
+  padding-top: 2px;
+}
+
+.fieldContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.value {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gray-900);
+}
+
+.unverifiedTag {
+  margin-left: 8px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--gray-500);
+}
+
+.quote {
+  margin: 6px 0 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--gold-600);
+  background: var(--gray-50);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  font-style: italic;
+  color: var(--gray-700);
+}
+
+.emptyNote {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gray-500);
+}

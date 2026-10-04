@@ -1,0 +1,58 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Environment files (NEVER include in image) — any depth
+**/.env
+**/.env.*
+**/*.env
+
+# IDE
+.vscode
+.idea
+**/*.swp
+**/*.swo
+
+# Python — any depth
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/htmlcov
+**/.coverage
+
+# Node — any depth (frontend/node_modules must never enter the build context)
+**/node_modules
+
+# Data directories (mounted as volumes; root-level dir by design)
+**/data/
+**/*.db
+
+# Documentation (NOTICE.md and LICENSE ship in the image: the licence terms
+# and third-party notices must travel with a distributed copy)
+**/*.md
+!NOTICE.md
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# Docker
+docker-compose*.yml
+Dockerfile.*
+
+# Backups (database dumps and data archives; never part of a build context)
+backups/
+**/*.sql
+**/*.sql.gz*
+**/*.tar.gz*
+**/*.enc
+
+# Secrets — any depth
+**/*.pem
+**/*.key
+**/*.crt
+**/credentials.json

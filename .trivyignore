@@ -1,0 +1,8 @@
+# chromadb pre-auth code injection — affects only the ChromaDB HTTP *server*
+# (/api/v2 collections endpoint with trust_remote_code). CaseCite uses the embedded
+# PersistentClient exclusively (backend/app/services/vectordb.py) and never runs
+# the Chroma server, so the vulnerable endpoint does not exist in this image.
+# No fixed release exists yet; remove when one ships. Mirrors the pip-audit
+# ignore in .github/workflows/ci.yml.
+CVE-2026-45829
+GHSA-f4j7-r4q5-qw2c

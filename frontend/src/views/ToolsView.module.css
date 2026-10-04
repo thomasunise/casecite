@@ -1,0 +1,233 @@
+.toolsView {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--gray-50);
+}
+
+/* Solid ground under the floating composer: content fades out beneath it
+   instead of bleeding through the chips and hints — same readable footing
+   the in-flow composers on Contracts / Matter Strategy get for free. */
+.toolsView::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 170px;
+  background: linear-gradient(to top, var(--gray-50) 62%, rgba(249, 250, 251, 0));
+  pointer-events: none;
+  z-index: 55;
+}
+
+.spin { animation: toolsSpin 0.8s linear infinite; }
+@keyframes toolsSpin { to { transform: rotate(360deg); } }
+
+/* Centered floating search ("hero") shown before a query is run.
+   Sits in the upper third of the page, not dead-center. */
+.hero {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+  animation: toolsFadeIn 0.3s ease;
+}
+.heroTitle {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--gray-900);
+}
+.heroSubtitle {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--gray-500);
+  max-width: 460px;
+  line-height: 1.5;
+}
+
+/* Floating pill input — shared by hero (centered) and bottom bar.
+   Matches the Matter Strategy composer (.inputWrap/.sendBtn) exactly. */
+.searchPill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 720px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 8px;
+  padding: 5px 6px 5px 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  transition: border-color 0.15s;
+}
+.searchPill:focus-within {
+  border-color: var(--navy-700);
+}
+.pillInput {
+  flex: 1;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 13px;
+  color: var(--gray-800);
+  padding: 8px 0;
+}
+.pillInput:disabled { opacity: 0.6; }
+.pillBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 8px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.pillBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Floating composer — a self-contained box overlaying the bottom of the
+   results, not a layout band. Results scroll behind it (the scroll area
+   pads its bottom to keep the last item reachable). */
+.bottomBar {
+  position: absolute;
+  /* Above the chat dock's blur backdrop — the composer never locks. */
+  z-index: 60;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(720px, calc(100% - 48px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.bottomBar > * { pointer-events: auto; }
+
+/* Chat / New search toggle above the bottom pill — same chip style as the
+   Matter Strategy composer controls (.chipToggle/.chipActive) */
+.composerToggle {
+  display: inline-flex;
+  gap: 6px;
+}
+.composerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.12s;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+.composerChip:hover { border-color: var(--gray-300); }
+.composerChipActive {
+  border-color: var(--navy-700);
+  color: var(--navy-800);
+  background: var(--gray-50);
+}
+
+/* Results region (scrolls; bottom padding clears the floating composer) */
+.resultsScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 20px 120px;
+  animation: toolsFadeInUp 0.35s ease;
+}
+
+@keyframes toolsFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes toolsFadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Empty state */
+.emptyState {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  padding: 40px;
+  color: var(--gray-500);
+}
+.emptyIcon { color: var(--gray-400); }
+.emptyTitle { margin: 8px 0 0; font-size: 18px; font-weight: 600; color: var(--gray-700); }
+.emptyText { margin: 0; max-width: 420px; font-size: 13px; line-height: 1.5; }
+
+/* Chat about results — lives in the shared FloatingChatDock */
+.msgRow { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; }
+.msgRowUser { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--navy-900);
+  color: var(--gold-500);
+  flex-shrink: 0;
+}
+.assistantBubble {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-100);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--gray-800);
+  white-space: pre-wrap;
+  max-width: 80%;
+}
+.userBubble {
+  background: var(--navy-900);
+  color: var(--on-secondary);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  max-width: 80%;
+}
+.processingBubble {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-100);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+/* Floating chat dock offsets — clears the tools bottom bar (chips + pill) */
+.dockOffsets {
+  --dock-bottom: 140px;
+  --dock-bottom-low: 40px;
+}

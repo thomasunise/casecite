@@ -1,0 +1,658 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    # A version tag builds and publishes a version-tagged image (see `build`).
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+# Least privilege by default: gitleaks-action needs pull-requests:read to
+# enumerate PR commits. The write scopes (packages for the GHCR push,
+# security-events for the Trivy SARIF upload) are granted to the `build` job
+# only, which never runs for pull requests.
+#
+# Third-party actions are pinned to commit SHAs (the trailing comment is the
+# tag the SHA was resolved from); Dependabot's github-actions ecosystem
+# proposes the bumps.
+permissions:
+  contents: read
+  pull-requests: read
+  actions: read
+
+env:
+  PYTHON_VERSION: "3.11"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ====================
+  # Security Scanning
+  # ====================
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          # gitleaks scans the full pushed commit range; a shallow clone makes
+          # git fail to resolve the range and the scan errors out.
+          fetch-depth: 0
+
+      - name: Run Gitleaks (Secret Scanning)
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"  # Avoid SARIF upload issues
+
+      - name: Verify no secrets detected
+        run: |
+          # Install gitleaks for explicit verification. Extract OUTSIDE the
+          # repo: the tarball ships gitleaks' own README/LICENSE, which contain
+          # example AWS keys — unpacking into . made the scan flag them as leaks.
+          GITLEAKS_DIR="$(mktemp -d)"
+          GITLEAKS_TGZ="$GITLEAKS_DIR/gitleaks.tar.gz"
+          wget -qO "$GITLEAKS_TGZ" https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          # SHA-256 from the release's gitleaks_8.18.4_checksums.txt — a
+          # tampered or swapped download fails here instead of being executed.
+          echo "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d  $GITLEAKS_TGZ" | sha256sum -c -
+          tar xzf "$GITLEAKS_TGZ" -C "$GITLEAKS_DIR"
+          chmod +x "$GITLEAKS_DIR/gitleaks"
+          # Run gitleaks and capture output
+          "$GITLEAKS_DIR/gitleaks" detect --source . --report-format json --report-path gitleaks-report.json --no-git || LEAKS_FOUND=$?
+          if [ "${LEAKS_FOUND:-0}" -eq 1 ]; then
+            echo "::error::Secrets detected! Review gitleaks-report.json"
+            cat gitleaks-report.json
+            exit 1
+          fi
+          echo "✅ No secrets detected"
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: |
+          # Pinned versions live in backend/requirements-dev.txt
+          pip install $(grep -E '^(bandit|pip-audit)==' backend/requirements-dev.txt)
+
+      - name: Run Bandit (Python Security Linter)
+        run: |
+          bandit -r backend/app -f json -o bandit-report.json --severity-level medium
+          bandit -r backend/app -f txt --severity-level medium
+
+      # Dependency vulnerability scanning is handled by pip-audit (below) and
+      # Trivy on the built image. The former Safety step was removed: its legacy
+      # `safety check` command is deprecated/EOL and the replacement requires a
+      # vendor account, while pip-audit covers the same advisory sources (PyPA).
+
+      - name: Run pip-audit
+        run: |
+          cd backend
+          # ChromaDB *server* advisories, not exploitable here: the app only ever
+          # constructs chromadb.PersistentClient (services/vectordb.py) and never
+          # runs the Chroma HTTP server, so its auth/RBAC/endpoint layers are
+          # not reachable. No fixed release exists (1.5.9 is latest); drop each
+          # ignore once one ships.
+          #   PYSEC-2026-311   pre-auth code injection in the server API
+          #   PYSEC-2026-3813  (CVE-2026-45830) cross-tenant read/write via the server API
+          #   PYSEC-2026-3815  (CVE-2026-45831) SimpleRBACAuthorizationProvider ignores tenant scope
+          #   PYSEC-2026-3814  (CVE-2026-45833) code injection via /api/v2/.../collections/{id}
+          # pip-audit reports these under the PYSEC ids, so both spellings are
+          # listed. The audit runs against requirements.lock — the exact,
+          # hash-pinned set the Docker image installs — not the looser
+          # requirements.txt.
+          pip-audit -r requirements.lock --require-hashes --disable-pip \
+            --ignore-vuln PYSEC-2026-311 \
+            --ignore-vuln PYSEC-2026-3813 \
+            --ignore-vuln PYSEC-2026-3814 \
+            --ignore-vuln PYSEC-2026-3815 \
+            --ignore-vuln CVE-2026-45830 \
+            --ignore-vuln CVE-2026-45831 \
+            --ignore-vuln CVE-2026-45833
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            gitleaks-report.json
+
+  # ====================
+  # Linting & Type Check
+  # ====================
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          pip install $(grep -E '^(ruff|mypy)==' backend/requirements-dev.txt)
+
+      - name: Run Ruff (Linter)
+        run: |
+          ruff check backend/app scripts --output-format=github
+
+      - name: Run Ruff (Formatter Check)
+        run: |
+          ruff format backend/app --check
+
+      - name: Install backend dependencies for MyPy
+        run: |
+          pip install -r backend/requirements.lock
+
+      - name: Run MyPy (Python Type Check)
+        # Non-blocking: the codebase has several hundred pre-existing mypy
+        # findings. Report-only until that debt is burned down — the error
+        # count is written to the job summary so it is visible on every run;
+        # flip to blocking by removing continue-on-error.
+        continue-on-error: true
+        run: |
+          set +e
+          mypy backend/app --ignore-missing-imports | tee mypy.log
+          status=${PIPESTATUS[0]}
+          echo "### MyPy (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+          tail -n 1 mypy.log >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Frontend dependency audit
+        run: |
+          cd frontend
+          # Production dependencies only: what ships in the built bundle.
+          npm audit --omit=dev --audit-level=high
+
+      - name: Frontend Lint (ESLint)
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Frontend Type Check
+        run: |
+          cd frontend
+          npx tsc --noEmit
+
+      - name: Frontend Build
+        run: |
+          cd frontend
+          npm run build
+
+  # ====================
+  # Backend Tests
+  # ====================
+  test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    needs: [lint]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.lock', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          # The hash-pinned lock is what the Docker image installs, so the
+          # tests exercise the dependency set that ships.
+          pip install -r requirements.lock
+          pip install -r requirements-dev.txt
+
+      - name: Run tests with coverage
+        env:
+          SECRET_KEY: test-secret-key-for-ci-only-not-production
+          ENCRYPTION_SALT: test-salt-for-ci-only
+          DEBUG: "true"
+          REDIS_URL: redis://localhost:6379/0
+          # Dummy key so /ready reports ready (it requires an LLM provider);
+          # no test makes a real API call with it.
+          OPENAI_API_KEY: sk-test-ci-dummy-key-not-real
+        run: |
+          cd backend
+          # Coverage floor: 50% (measured 58.6% with branch coverage on
+          # 2026-10-04). Ratchet this number UP as coverage grows — never down.
+          python -m pytest tests/ -v --cov=app --cov-branch --cov-report=xml --cov-report=html --cov-report=term-missing --cov-fail-under=50
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          cd backend
+          python -m coverage report --format=markdown >> $GITHUB_STEP_SUMMARY 2>/dev/null || true
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: coverage-reports
+          path: |
+            backend/coverage.xml
+            backend/htmlcov/
+
+  # ====================
+  # Frontend Tests
+  # ====================
+  test-frontend:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    needs: [lint]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Run tests with coverage
+        run: |
+          cd frontend
+          npx vitest run --coverage --reporter=default
+
+      - name: Upload frontend coverage reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: frontend-coverage-reports
+          path: |
+            frontend/coverage/
+
+  # ====================
+  # E2E Tests (Playwright)
+  # ====================
+  test-e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    needs: [lint]
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Install Playwright browsers
+        run: |
+          cd frontend
+          npx playwright install --with-deps chromium firefox
+
+      - name: Run Playwright tests
+        run: |
+          cd frontend
+          npx playwright test --reporter=html
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
+
+  # ====================
+  # Migration Validation
+  # ====================
+  migration-check:
+    name: Migration Validation
+    runs-on: ubuntu-latest
+    needs: [lint]
+    # Alembic imports app.config, whose production-mode validation (DEBUG
+    # unset here — intentionally, to exercise the prod path) fails
+    # closed without these. All values are CI-only dummies. Redis IS required:
+    # migrations/env.py imports the models, and app.models.enums pulls in
+    # app.services.auth, which constructs AuthService (and pings Redis) at
+    # import time in non-debug mode.
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/casecite_test
+      SECRET_KEY: test-secret-key-for-ci-only-not-production
+      ENCRYPTION_SALT: test-salt-for-ci-only
+      AUDIT_HMAC_KEY: test-audit-hmac-key-for-ci-only-not-production
+      REDIS_URL: redis://localhost:6379/0
+      OPENAI_API_KEY: sk-test-ci-dummy-key-not-real
+      DISK_ENCRYPTION_ACKNOWLEDGED: "true"
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: casecite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.lock', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.lock
+
+      - name: Upgrade to head
+        run: |
+          cd backend
+          alembic upgrade head
+          echo "✅ Upgrade to head succeeded"
+
+      - name: Downgrade one revision
+        run: |
+          cd backend
+          alembic downgrade -1
+          echo "✅ Downgrade -1 succeeded"
+
+      - name: Re-upgrade to head
+        run: |
+          cd backend
+          alembic upgrade head
+          echo "✅ Re-upgrade to head succeeded"
+
+      - name: Check for schema drift
+        run: |
+          cd backend
+          alembic check 2>&1 || {
+            echo "::error::Schema drift detected — models have changes not captured in migrations. Run: alembic revision --autogenerate -m 'description'"
+            exit 1
+          }
+          echo "✅ No schema drift detected"
+
+  # ====================
+  # Production-mode Smoke Test
+  # ====================
+  production-smoke:
+    name: Production Smoke Test
+    runs-on: ubuntu-latest
+    needs: [lint]
+    timeout-minutes: 15
+    # The backend tests run with DEBUG=true on SQLite, so this is the only job
+    # that boots the app the way a deployment does — DEBUG unset, Postgres,
+    # Redis, fail-closed config — and then restarts it over the data the first
+    # boot wrote. All values are CI-only dummies.
+    env:
+      DATABASE_URL: postgresql+asyncpg://test:test@localhost:5432/casecite_test
+      # The service container's Postgres has no TLS; production mode otherwise forces it.
+      DB_SSL: internal
+      SECRET_KEY: test-secret-key-for-ci-only-not-production
+      ENCRYPTION_SALT: test-salt-for-ci-only
+      AUDIT_HMAC_KEY: test-audit-hmac-key-for-ci-only-not-production
+      REDIS_URL: redis://localhost:6379/0
+      OPENAI_API_KEY: sk-test-ci-dummy-key-not-real
+      DISK_ENCRYPTION_ACKNOWLEDGED: "true"
+      CORS_ORIGINS: https://ci.casecite.test
+      # A public hostname only, as a real deployment sets it: the smoke test
+      # reaches the app over loopback, which must stay allowed regardless.
+      ALLOWED_HOSTS: ci.casecite.test
+      REGISTRATION_BOOTSTRAP_TOKEN: ci-only-bootstrap-token-not-a-secret
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: casecite_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.lock', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.lock
+
+      - name: Migrate
+        run: |
+          cd backend
+          alembic upgrade head
+
+      - name: Boot, exercise, restart
+        run: python scripts/smoke_production.py
+
+  # ====================
+  # Build Docker Image
+  # ====================
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [security-scan, test, test-frontend, test-e2e, migration-check, production-smoke]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write          # push the image to GHCR
+      security-events: write   # upload the Trivy SARIF
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix=,format=long
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build Docker image (scan before push)
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # /health reports this as the running build.
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Trivy on hosted runners cannot read images from the container store
+      # (containerd socket permission denied) — scan an exported tarball instead.
+      - name: Export image for scanning
+        run: docker save -o /tmp/image.tar ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Run Trivy vulnerability scanner (blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          input: /tmp/image.tar
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          # Debian-slim always ships some upstream-unfixed CVEs; blocking on
+          # them makes the gate permanently red. Fixable vulns still block.
+          ignore-unfixed: true
+          trivyignores: '.trivyignore'
+
+      - name: Run Trivy vulnerability scanner (SARIF upload)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        if: always()
+        with:
+          input: /tmp/image.tar
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2  # v4
+        if: always()
+        # Informational: code scanning is unavailable on private repos, and the
+        # blocking Trivy step above is the actual gate.
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Push Docker image (after Trivy passes)
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25  # v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          cache-from: type=gha
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: cyclonedx-json
+          output-file: sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  # ====================
+  # Deployment — intentionally not included here
+  # ====================
+  # This pipeline builds, tests, and pushes a Docker image to GHCR.
+  # That image is the universal deployment artifact. Actual CD (deploy)
+  # jobs are environment-specific and belong in your own workflow file.
+  #
+  # Copy the template that matches your infra from deploy/examples/:
+  #   - deploy-coolify-webhook.yml   (Coolify webhook trigger)
+  #   - deploy-docker-compose.yml    (SSH to any VPS)
+  #   - deploy-azure.yml             (Azure Container Apps)
+  #
+  # See docs/deployment.md for the full guide.

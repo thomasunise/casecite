@@ -1,0 +1,38 @@
+# Dependabot opens version-bump PRs (a few at a time) for each ecosystem and
+# reports advisories in the repo's Security tab. Every PR goes through the
+# same CI as any other change: pip-audit against requirements.lock, npm audit
+# on production dependencies, and Trivy on the built image all fail the build
+# on known vulnerabilities.
+#
+# Note for the pip ecosystem: backend/requirements.lock is generated with
+# `uv pip compile` (see the header of that file). After merging a bump to
+# requirements.txt, regenerate the lock.
+version: 2
+updates:
+  # Python backend dependencies
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Frontend (npm) dependencies
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # GitHub Actions (workflows pin actions by commit SHA; this bumps the pins)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # Base images in the Dockerfile
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3

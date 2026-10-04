@@ -1,0 +1,151 @@
+.docPanel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* Anchored to the true bottom of the sidebar — the nav breathes above, no
+     reserved dead strip. Upload status chips overlay the drop zone itself
+     (absolute, below), so their appearing/vanishing never shifts the box. */
+  justify-content: flex-end;
+  position: relative;
+}
+
+.dropZone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 16px;
+  min-height: 88px;
+  max-height: 150px;
+  flex: 1;
+  border: 1.5px dashed var(--chrome-border-strong);
+  border-radius: 10px;
+  background: var(--chrome-fill-subtle);
+  cursor: pointer;
+  transition: all 0.15s;
+  position: relative;
+}
+
+.dropZone:hover {
+  border-color: var(--gold-500);
+  background: var(--chrome-fill);
+}
+
+.dropZoneActive {
+  border-color: var(--gold-500);
+  background: rgba(184, 134, 11, 0.1);
+}
+
+.dropZoneDisabled {
+  opacity: 0.6;
+}
+
+.dropText {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--chrome-text-muted);
+  text-align: center;
+}
+
+.dropHint {
+  font-size: 11px;
+  color: var(--chrome-text-faint);
+}
+
+.hiddenInput {
+  display: none;
+}
+
+/* Upload status floats over the bottom edge of the drop zone — an overlay,
+   never part of the flow, so the box never jumps and no space is reserved. */
+.docList {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 4px;
+  max-height: 100px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  z-index: 2;
+}
+
+.docItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  /* Solid raised surface — these chips sit on top of the drop zone. */
+  background: var(--chrome-bg-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.docInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.docName {
+  display: block;
+  font-size: 11px;
+  color: var(--chrome-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.docMeta {
+  font-size: 10px;
+  color: var(--chrome-text-faint);
+}
+
+.docRemove {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--chrome-fill);
+  border: none;
+  border-radius: 4px;
+  color: var(--chrome-text-muted);
+  cursor: pointer;
+}
+
+.lockBadge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: var(--gold-500);
+}
+
+.iconMuted {
+  color: var(--chrome-text-faint);
+}
+
+.iconUploading {
+  color: var(--amber-500);
+  animation: spin 1s linear infinite;
+}
+
+.iconError {
+  color: var(--red-500);
+}
+
+.iconSuccess {
+  color: var(--green-500);
+}
+
+.iconFile {
+  color: var(--navy-600);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}

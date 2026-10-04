@@ -1,0 +1,264 @@
+/* AuthModals styles */
+
+/* Modal framework (shared) */
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: fadeIn 0.15s;
+}
+
+.modalContainer {
+  background: white;
+  border-radius: 14px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: scaleIn 0.15s;
+}
+
+.modalContainerSmall {
+  composes: modalContainer;
+  max-width: 400px;
+}
+
+.modalContainerMedium {
+  composes: modalContainer;
+  max-width: 440px;
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.modalHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.modalIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modalIconNavy {
+  composes: modalIcon;
+  background: var(--navy-800);
+}
+
+.modalIconAmber {
+  composes: modalIcon;
+  background: var(--amber-500);
+}
+
+.modalTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.modalSubtitle {
+  font-size: 12px;
+  color: var(--gray-500);
+}
+
+.modalClose {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--gray-500);
+}
+
+.modalBody {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+}
+
+.modalFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid var(--gray-200);
+  background: var(--gray-50);
+}
+
+.modalInput {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--gray-800);
+  outline: none;
+}
+
+.btnSecondary {
+  padding: 10px 18px;
+  background: white;
+  color: var(--gray-700);
+  border: 1px solid var(--gray-300);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnPrimary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 18px;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Error box */
+
+.errorBox {
+  padding: 10px 14px;
+  background: #FEE2E2;
+  color: #DC2626;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+
+/* Form layout */
+
+.formLayout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.formLabel {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-700);
+  margin-bottom: 6px;
+  display: block;
+}
+
+/* Forgot password link */
+
+.forgotLink {
+  background: none;
+  border: none;
+  color: var(--blue-600);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: right;
+  padding: 0;
+}
+
+/* Bottom bar with switch link */
+
+.bottomBar {
+  padding: 16px 24px;
+  border-top: 1px solid var(--gray-200);
+  text-align: center;
+  font-size: 13px;
+  color: var(--gray-600);
+}
+
+.switchLink {
+  background: none;
+  border: none;
+  color: var(--blue-600);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Success state (ForgotPasswordModal) */
+
+.successContainer {
+  text-align: center;
+  padding: 20px 0;
+}
+
+.successIcon {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--green-100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+}
+
+.successTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-800);
+  margin-bottom: 8px;
+}
+
+.successMessage {
+  font-size: 14px;
+  color: var(--gray-600);
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+/* "Initial setup" disclosure on the signup form */
+
+.setupDisclosure {
+  font-size: 13px;
+  color: var(--gray-600);
+}
+
+.setupDisclosure summary {
+  cursor: pointer;
+  margin-bottom: 10px;
+}
+
+/* Password policy hint under a new-password field */
+
+.policyHint {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--gray-500);
+}

@@ -1,0 +1,65 @@
+/* Fonts are bundled with the app (see styles/fonts.ts) — nothing is fetched
+   from a third-party font CDN at runtime. */
+
+:root {
+  /* Brand ramps — defaults mirror brandingStore DEFAULT_BRANDING exactly
+     (same lighten/darken derivations); applyBrandingColors overrides at runtime */
+  --navy-900: #0A0A0A; --navy-800: #141414; --navy-700: #1E1E1E; --navy-600: #292929;
+  --gold-700: #595959; --gold-600: #737373; --gold-500: #E5E5E5; --gold-400: #FFFFFF; --gold-300: #FFFFFF; --gold-50: #F5F5F5;
+  --accent-600: #5F5F5F; --accent-500: #737373; --accent-400: #929292;
+  --gray-50: #F9FAFB; --gray-100: #F3F4F6; --gray-200: #E5E7EB; --gray-300: #D1D5DB;
+  --gray-400: #9CA3AF; --gray-500: #6B7280; --gray-600: #4B5563; --gray-700: #374151;
+  --gray-800: #1F2937; --gray-900: #111827;
+  --green-50: #F0FDF4; --green-100: #DCFCE7; --green-500: #22C55E; --green-600: #16A34A; --green-700: #15803D;
+  --blue-500: #3B82F6; --blue-100: #DBEAFE; --blue-600: #2563EB;
+  --amber-50: #FFFBEB; --amber-100: #FEF3C7; --amber-200: #FDE68A; --amber-500: #F59E0B; --amber-600: #D97706; --amber-700: #B45309; --amber-800: #92400E;
+  --red-50: #FEF2F2; --red-100: #FEE2E2; --red-500: #EF4444; --red-600: #DC2626; --red-700: #B91C1C;
+  --purple-500: #8B5CF6; --purple-100: #EDE9FE;
+
+  /* On-colors: text/icon colors guaranteed readable on top of the brand colors.
+     brandingStore recomputes these from color luminance whenever branding changes,
+     so a firm that picks a light secondary gets dark text automatically. */
+  --on-primary: #FFFFFF;
+  --on-primary-muted: rgba(255, 255, 255, 0.7);
+  --on-secondary: #FFFFFF;
+  --on-secondary-strong: rgba(255, 255, 255, 0.87);
+  --on-secondary-muted: rgba(255, 255, 255, 0.62);
+  --on-secondary-faint: rgba(255, 255, 255, 0.4);
+  --on-secondary-fill: rgba(255, 255, 255, 0.09);
+  --on-secondary-fill-subtle: rgba(255, 255, 255, 0.05);
+  --on-secondary-border: rgba(255, 255, 255, 0.1);
+  --on-secondary-border-strong: rgba(255, 255, 255, 0.18);
+  --on-accent: #FFFFFF;
+
+  /* Chrome: the app shell surfaces (sidebar, doc panel, confirm dialog, error screen).
+     Default theme = dark brand chrome; [data-theme="light"] flips these to light. */
+  --chrome-bg: var(--navy-900);
+  --chrome-bg-raised: var(--navy-800);
+  --chrome-edge: transparent;
+  --chrome-text: var(--on-secondary);
+  --chrome-text-secondary: var(--on-secondary-strong);
+  --chrome-text-muted: var(--on-secondary-muted);
+  --chrome-text-faint: var(--on-secondary-faint);
+  --chrome-fill: var(--on-secondary-fill);
+  --chrome-fill-subtle: var(--on-secondary-fill-subtle);
+  --chrome-border: var(--on-secondary-border);
+  --chrome-border-strong: var(--on-secondary-border-strong);
+  /* Wordmark matches the active-icon box fill (gold-500 in dark chrome);
+     the light theme needs a darker gray to stay readable on white. */
+  --chrome-wordmark: var(--gold-500);
+}
+
+:root[data-theme="light"] {
+  --chrome-bg: #FFFFFF;
+  --chrome-bg-raised: #FFFFFF;
+  --chrome-edge: var(--gray-200);
+  --chrome-text: var(--gray-900);
+  --chrome-text-secondary: var(--gray-700);
+  --chrome-text-muted: var(--gray-500);
+  --chrome-text-faint: var(--gray-400);
+  --chrome-fill: rgba(10, 10, 10, 0.07);
+  --chrome-fill-subtle: rgba(10, 10, 10, 0.04);
+  --chrome-border: var(--gray-200);
+  --chrome-border-strong: var(--gray-300);
+  --chrome-wordmark: var(--gold-600);
+}

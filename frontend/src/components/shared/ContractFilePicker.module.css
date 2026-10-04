@@ -1,0 +1,319 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+  animation: fadeIn 0.15s;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.container {
+  background: white;
+  border-radius: 14px;
+  width: 100%;
+  max-width: 560px;
+  max-height: 75vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: scaleIn 0.15s;
+}
+
+@keyframes scaleIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.headerRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.headerIcon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--navy-800);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.headerTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--gray-900);
+  margin: 0;
+}
+
+.headerSubtitle {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin: 0;
+}
+
+.closeBtn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+}
+
+.searchWrapper {
+  position: relative;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--gray-400);
+}
+
+.searchInput {
+  width: 100%;
+  padding: 10px 12px 10px 38px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-300);
+  font-size: 14px;
+  outline: none;
+}
+
+.treeContent {
+  flex: 1;
+  overflow: auto;
+  padding: 12px 24px;
+}
+
+.loadingState {
+  text-align: center;
+  padding: 40px;
+}
+
+.loadingState p {
+  margin-top: 12px;
+  color: var(--gray-500);
+}
+
+.errorState {
+  text-align: center;
+  padding: 40px;
+  color: var(--red-500);
+}
+
+.errorState p {
+  margin-top: 12px;
+}
+
+.retryBtn {
+  margin-top: 8px;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  cursor: pointer;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 40px;
+  color: var(--gray-500);
+}
+
+.emptyState p:first-of-type {
+  margin-top: 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gray-700);
+}
+
+.emptyState p:nth-of-type(2) {
+  font-size: 13px;
+  margin: 8px auto 0;
+  max-width: 300px;
+}
+
+.treeItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: background 0.15s;
+  background: transparent;
+  border: 1px solid transparent;
+  margin-bottom: 2px;
+}
+
+.treeItem:not(.treeItemActive):hover {
+  background: var(--gray-100);
+}
+
+.treeItemActive {
+  background: var(--gold-50);
+  border: 1px solid var(--gold-400);
+}
+
+.folderToggle {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.folderName {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.docCount {
+  font-size: 11px;
+  color: var(--gray-500);
+  background: var(--gray-100);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.fileSpacer {
+  width: 16px;
+}
+
+.fileName {
+  flex: 1;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileMeta {
+  font-size: 11px;
+  color: var(--gray-400);
+  display: flex;
+  gap: 8px;
+}
+
+.footer {
+  padding: 16px 24px;
+  border-top: 1px solid var(--gray-200);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.footerInfo {
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.footerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.cancelBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: 1px solid var(--gray-300);
+  background: white;
+  color: var(--gray-700);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.loadBtn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  border: none;
+  background: var(--gold-500);
+  color: var(--on-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  /* The label changes ("Load Document" / "Open 4 side by side" / spinner) —
+     the button's footprint must NOT. Sized for the longest label. */
+  min-width: 190px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.loadBtn:disabled {
+  background: var(--gray-300);
+  color: var(--gray-500);
+  cursor: not-allowed;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.iconGray500 {
+  color: var(--gray-500);
+}
+
+.iconWhite {
+  color: var(--on-secondary);
+}
+
+.iconGray300 {
+  color: var(--gray-300);
+}
+
+.spinnerGold {
+  animation: spin 1s linear infinite;
+  color: var(--gold-500);
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+.treeItemIndent {
+  padding-left: calc(12px + var(--depth-indent, 0px));
+}
+
+/* Multi-select order badge */
+.selectMark {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--gray-300);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: white;
+  flex-shrink: 0;
+}
+
+.selectMarkActive {
+  border-color: var(--navy-700);
+  background: var(--navy-700);
+}

@@ -1,0 +1,84 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rowMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.rowMain:hover:not(:disabled) { background: var(--gray-50); }
+.rowMain:disabled { cursor: default; opacity: 0.7; }
+
+.badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+  background: var(--gray-100);
+  border-radius: 4px;
+  padding: 2px 6px;
+}
+
+.rowText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-800);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.time {
+  font-size: 10px;
+  color: var(--gray-400);
+}
+
+.deleteBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.deleteBtn:hover { background: var(--gray-100); color: var(--red-500, #ef4444); }
+
+.empty {
+  font-size: 11.5px;
+  color: var(--gray-400);
+  line-height: 1.5;
+  padding: 4px 2px;
+}
+
+.spin { animation: wslSpin 1s linear infinite; }
+@keyframes wslSpin { from { transform: rotate(0); } to { transform: rotate(360deg); } }

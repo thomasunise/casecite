@@ -1,0 +1,351 @@
+/* CaseView styles — chat-first layout matching ResearchView */
+
+.caseViewArea {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--gray-50);
+}
+
+/* ── Compact Header ── */
+
+.caseHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  background: white;
+  border-bottom: 1px solid var(--gray-200);
+  flex-shrink: 0;
+}
+
+.backBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: var(--gray-100);
+  border: none;
+  border-radius: 6px;
+  color: var(--gray-600);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.backBtn:hover { background: var(--gray-200); }
+
+.caseHeaderInfo {
+  flex: 1;
+  min-width: 0;
+}
+
+.caseTitle {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--navy-800);
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+}
+
+.caseMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--gray-500);
+  margin-top: 2px;
+}
+.caseMeta span { display: flex; align-items: center; gap: 4px; }
+
+.citeBadge {
+  padding: 1px 6px;
+  background: var(--gold-100);
+  color: var(--gold-700);
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.detailsToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: var(--gray-100);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--gray-600);
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.detailsToggle:hover { background: var(--gray-200); }
+
+/* ── Messages Area (single scrollable region for opinion + chat) ── */
+
+/* Fills the area under the header; the shared tool-page shell (position:
+   relative) anchors the floating composer over the scroll region. */
+.caseBody {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.messagesWrap {
+  flex: 1;
+  overflow: auto;
+}
+
+/* Opinion block — lives inside the scroll area */
+
+.opinionBlock {
+  /* Same reading column as the Matter Strategy workspace — never full width. */
+  max-width: 860px;
+  margin: 0 auto 20px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  padding: 26px 32px;
+}
+
+.detailSection {
+  margin-bottom: 16px;
+}
+.detailSection:last-child { margin-bottom: 0; }
+
+.detailSectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--navy-700);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.detailText {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--gray-700);
+  white-space: pre-wrap;
+}
+
+.detailJudges {
+  font-size: 12px;
+  color: var(--gray-600);
+  margin-bottom: 12px;
+}
+
+/* Loading / Error states */
+
+.loadingState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100%;
+  color: var(--gray-500);
+  font-size: 15px;
+}
+
+.errorState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100%;
+  color: var(--red-600);
+  text-align: center;
+  padding: 40px;
+}
+
+/* ── Message Rows ── */
+
+.messageRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.messageRowUser {
+  composes: messageRow;
+  justify-content: flex-end;
+}
+
+.assistantAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--navy-800);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--gold-400);
+  flex-shrink: 0;
+}
+
+
+.bubble {
+  max-width: 720px;
+  padding: 14px 18px;
+  border-radius: 12px;
+}
+
+.userBubble {
+  composes: bubble;
+  background: var(--navy-800);
+  color: var(--on-secondary);
+  margin-left: auto;
+}
+
+.assistantBubble {
+  composes: bubble;
+  background: white;
+  border: 1px solid var(--gray-200);
+}
+
+.processingBubble {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.messageContent {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--gray-700);
+  white-space: pre-wrap;
+}
+
+.userBubble .messageContent {
+  color: var(--on-secondary);
+}
+
+/* The chat input is the app-wide floating composer (ToolsView.module.css:
+   .bottomBar/.composerToggle/.searchPill). Page-local: only the placeholder
+   ticker, identical construction to Matter Strategy's composer. */
+
+.inputTicker {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.inputTickerHint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--gray-400);
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: hintSlideUp 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes hintSlideUp {
+  from {
+    transform: translateY(130%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+/* ── Spinner ── */
+
+.spinnerIcon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Floating conversation dock — sits above the taller case composer (scope
+   chips + pill), so it needs a bigger resting offset than the default. */
+.dockOffsets {
+  --dock-bottom: 140px;
+  --dock-bottom-low: 40px;
+}
+
+/* Full-page view: the whole composer collapses to a floating pill */
+.composerToggle {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 8px;
+  z-index: 60;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border-radius: 9999px;
+  border: 1px solid var(--gray-200);
+  background: white;
+  color: var(--gray-600);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+/* Hints row under the pill — identical construction to Contracts/Matter Strategy */
+.inputHints {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--gray-400);
+}
+
+.kbd {
+  display: inline-block;
+  padding: 2px 5px;
+  background: var(--gray-100);
+  border: 1px solid var(--gray-200);
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: inherit;
+}
+
+.composerCollapseBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  font-size: 10.5px;
+  border: none;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+}
+
+.composerCollapseBtn:hover {
+  color: var(--gray-600);
+}

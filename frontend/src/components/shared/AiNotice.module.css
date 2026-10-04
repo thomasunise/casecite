@@ -1,0 +1,21 @@
+/* Persistent "AI-generated" notice — sits quietly at the foot of every
+   generated artifact (chat answers, analyses, redlines, drafts, briefs).
+   Muted, small, never dismissible. Content surfaces are always light, so
+   the gray ramp reads in both chrome themes. */
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--gray-200);
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--gray-500);
+}
+
+.icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--gray-400);
+}

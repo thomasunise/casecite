@@ -1,0 +1,20 @@
+# Development and CI tooling. Install after the runtime dependencies:
+#
+#   pip install -r requirements.lock --require-hashes   (or -r requirements.txt)
+#   pip install -r requirements-dev.txt
+#
+# A plain `python -m pytest` needs only pytest and pytest-asyncio; pytest-cov is
+# for the coverage run CI does (`--cov=app --cov-branch --cov-fail-under=50`).
+
+# Tests
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+
+# Lint, format, types (ruff must match .pre-commit-config.yaml)
+ruff==0.16.4
+mypy==1.20.1
+
+# Security scanning (the same tools the CI security-scan job runs)
+bandit==1.9.4
+pip-audit==2.10.1

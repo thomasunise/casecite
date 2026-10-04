@@ -1,0 +1,45 @@
+# Development Docker Compose
+# Usage: docker compose -f docker-compose.dev.yml up -d
+# Frontend: run `npm run dev` in frontend/ for hot-reload (port 3000)
+# Backend: accessible at port 8000
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: python-base
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - VOYAGE_API_KEY=${VOYAGE_API_KEY:-}
+      # Leave unset: compose does NOT execute $(...), so a command-substitution
+      # default would become a shared, publicly-known literal key. In dev
+      # (DEBUG=true) the app auto-generates an ephemeral key when this is empty.
+      - SECRET_KEY=${SECRET_KEY:-}
+      - DEBUG=true
+      - VECTOR_DB=chroma
+      - CHROMA_PERSIST_DIR=/app/data/chroma
+      - UPLOAD_DIR=/app/data/uploads
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - MICROSOFT_CLIENT_ID=${MICROSOFT_CLIENT_ID:-}
+      - MICROSOFT_CLIENT_SECRET=${MICROSOFT_CLIENT_SECRET:-}
+      - MICROSOFT_TENANT_ID=${MICROSOFT_TENANT_ID:-}
+    volumes:
+      - ./backend/app:/app/app:ro
+      - rag_data:/app/data
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  rag_data:
+    driver: local

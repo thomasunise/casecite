@@ -1,0 +1,235 @@
+/* ComparisonCard — clause-by-clause diff of two contracts inside an
+   assistant chat bubble. House card style: hairline dividers, uppercase
+   micro-labels, navy data marks; amber/green/red/gray status chips. */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ===== Header ===== */
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.splitViewBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: white;
+  background: var(--navy-800);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.splitViewBtn:hover { background: var(--navy-700); }
+
+.clauseRowWrap {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.clauseRowWrap > button:first-child { flex: 1; min-width: 0; }
+
+.locateBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gray-400);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.locateBtn:hover { color: var(--navy-700); background: var(--gray-100); }
+
+.overline {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-700);
+  margin: 0;
+}
+
+.labels {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.labelChip {
+  padding: 3px 10px;
+  border: 1px solid var(--gray-200);
+  border-radius: 999px;
+  background: var(--gray-50);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--navy-900);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labelArrow {
+  color: var(--gray-400);
+}
+
+.overall {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--gray-900);
+  white-space: pre-wrap;
+}
+
+/* ===== Clause rows ===== */
+.clauseList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.clause {
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.clauseRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.clauseRow:disabled {
+  cursor: default;
+}
+
+.clauseRow:hover:not(:disabled) {
+  background: var(--gray-50);
+}
+
+.statusChip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.statusChanged {
+  background: var(--amber-50);
+  color: var(--amber-600);
+}
+
+.statusAdded {
+  background: var(--green-50);
+  color: var(--green-700);
+}
+
+.statusRemoved {
+  background: var(--red-50);
+  color: var(--red-600);
+}
+
+.statusUnchanged {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.topic {
+  font-weight: 600;
+  color: var(--navy-900);
+  flex-shrink: 0;
+}
+
+.summary {
+  flex: 1;
+  min-width: 160px;
+  font-size: 12px;
+  color: var(--gray-600);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chevron {
+  color: var(--gray-400);
+  flex-shrink: 0;
+}
+
+/* ===== Expanded quotes ===== */
+.quotes {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px 12px;
+  border-top: 1px solid var(--gray-100);
+  padding-top: 10px;
+}
+
+.quoteBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.quoteLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--navy-800);
+}
+
+.unverifiedTag {
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--gray-500);
+}
+
+.quote {
+  margin: 0;
+  padding: 6px 12px;
+  border-left: 2px solid var(--gold-600);
+  background: var(--gray-50);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  font-style: italic;
+  color: var(--gray-700);
+  white-space: pre-wrap;
+}

@@ -1,0 +1,86 @@
+/* PdfDocumentViewer — Native browser PDF rendering in the contract analyzer */
+
+.pdfViewer {
+  flex: 1;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Info bar */
+.pdfToolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--gray-100);
+  flex-shrink: 0;
+  background: var(--gray-50);
+}
+
+.pdfInfoLabel {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--gray-500);
+}
+
+.pdfPageCount {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--gray-400);
+}
+
+/* Scroll area */
+.pdfScrollArea {
+  flex: 1;
+  overflow: hidden;
+  background: var(--gray-100);
+  display: flex;
+  min-height: 0;
+}
+
+/* Iframe for native PDF rendering */
+.pdfIframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  flex: 1;
+}
+
+/* Error state */
+.pdfError {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 60px 0;
+  color: var(--gray-400);
+  font-size: 13px;
+  width: 100%;
+}
+
+.pdfErrorDetail {
+  font-size: 11px;
+  color: var(--gray-400);
+  max-width: 300px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+}
+
+.pdfDownloadLink {
+  color: var(--blue-500);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.iconGray400 {
+  color: var(--gray-400);
+}
