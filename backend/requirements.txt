@@ -1,7 +1,7 @@
 # FastAPI and server
 fastapi==0.139.0
 # starlette pinned explicitly: 1.3.1 clears PYSEC-2026-161/248/249/1941/1942/2280/2281
-starlette==1.3.1
+starlette==1.7.0
 uvicorn[standard]==0.27.0
 # 0.0.31+ clears PYSEC-2026-1852 and CVE-2026-40347/42561/53538-53540
 python-multipart==0.0.32
