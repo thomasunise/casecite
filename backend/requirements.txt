@@ -98,7 +98,7 @@ pyotp==2.9.0
 
 # Imported directly by the app (cryptography: encryption, key storage, file
 # crypto; lxml: DOCX handling), so declared rather than left transitive
-cryptography==50.0.0
+cryptography==50.0.2
 lxml==6.1.1
 
 # Transitive floors: urllib3 < 2.8.0 and oauthlib < 4.0.0 carry advisories
