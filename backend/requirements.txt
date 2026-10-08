@@ -6,7 +6,7 @@ uvicorn[standard]==0.27.0
 # 0.0.31+ clears PYSEC-2026-1852 and CVE-2026-40347/42561/53538-53540
 python-multipart==0.0.32
 # 2.15.0 clears PYSEC-2026-120/175/177/178/179 and PYSEC-2026-4140..4152
-PyJWT[crypto]==2.15.0
+PyJWT[crypto]==2.15.1
 
 # RAG and AI
 openai==1.12.0
