@@ -22,7 +22,7 @@ RUN npm run build && \
 
 # ---- Stage 2: Python Runtime ----
 # Floating patch tag (see note above on the frontend stage).
-FROM python:3.11-slim AS python-base
+FROM python:3.14-slim AS python-base
 ENV PYTHONUTF8=1 \
     PYTHONIOENCODING=utf-8 \
     LANG=C.UTF-8 \
