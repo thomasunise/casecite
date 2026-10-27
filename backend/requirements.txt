@@ -16,7 +16,7 @@ anthropic==0.18.1
 # but never imported. 1.2.x is the newest google-genai line that does not force
 # httpx>=0.28.1 (1.3.0+ does, conflicting with httpx==0.27.0 below).
 google-genai==1.2.0
-tiktoken==0.6.0
+tiktoken==0.14.0
 
 # Search: no cross-encoder reranker ships. sentence-transformers is omitted on
 # purpose (it pulls PyTorch, ~2GB); retrieval is vector search with keyword
