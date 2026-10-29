@@ -30,7 +30,7 @@ tiktoken==0.14.0
 # No fixed release yet — bump when one ships (ignore is in ci.yml pip-audit step).
 chromadb==1.5.9
 pinecone==5.4.2
-numpy<2.0
+numpy<3.0
 # transitive via chromadb/google SDKs; pinned to clear PYSEC-2026-1805
 protobuf>=5.29.6,<6
 
