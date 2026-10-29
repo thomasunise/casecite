@@ -30,7 +30,7 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^7.18.4",
-    "zustand": "^5.0.11"
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.1",
