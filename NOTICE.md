@@ -34,7 +34,7 @@ universal, so it includes a few packages that install only on some platforms.
 | [aiohttp](https://github.com/aio-libs/aiohttp) | 3.14.5 | Apache-2.0 AND MIT |
 | [aiosignal](https://github.com/aio-libs/aiosignal) | 1.4.0 | Apache 2.0 |
 | [aiosqlite](https://pypi.org/project/aiosqlite/) | 0.20.0 | MIT License |
-| [alembic](https://alembic.sqlalchemy.org) | 1.13.1 | MIT |
+| [alembic](https://alembic.sqlalchemy.org) | 1.20.1 | MIT |
 | [annotated-doc](https://github.com/fastapi/annotated-doc) | 0.0.4 | MIT |
 | [annotated-types](https://github.com/annotated-types/annotated-types) | 0.7.0 | MIT License |
 | [anthropic](https://github.com/anthropics/anthropic-sdk-python) | 2.3.0 | Apache-2.0 |
@@ -127,9 +127,9 @@ universal, so it includes a few packages that install only on some platforms.
 | [pyasn1-modules](https://github.com/pyasn1/pyasn1-modules) | 0.4.2 | BSD |
 | [pybase64](https://github.com/mayeut/pybase64) | 1.4.3 | BSD-2-Clause |
 | [pycparser](https://github.com/eliben/pycparser) | 3.0 | BSD-3-Clause |
-| [pydantic](https://github.com/pydantic/pydantic) | 2.13.4 | MIT |
-| [pydantic-core](https://github.com/pydantic/pydantic) | 2.46.4 | MIT |
-| [pydantic-settings](https://github.com/pydantic/pydantic-settings) | 2.14.2 | MIT |
+| [pydantic](https://github.com/pydantic/pydantic) | 2.14.1 | MIT |
+| [pydantic-core](https://github.com/pydantic/pydantic) | 2.50.1 | MIT |
+| [pydantic-settings](https://github.com/pydantic/pydantic-settings) | 2.16.1 | MIT |
 | [pygments](https://pygments.org) | 2.20.0 | BSD-2-Clause |
 | [pyjwt](https://github.com/jpadilla/pyjwt) | 2.15.1 | MIT |
 | [pyotp](https://github.com/pyotp/pyotp) | 2.9.0 | MIT License |
@@ -170,7 +170,7 @@ universal, so it includes a few packages that install only on some platforms.
 | [truststore](https://github.com/sethmlarson/truststore) | 0.10.5 | MIT |
 | [typer](https://github.com/fastapi/typer) | 0.26.8 | MIT |
 | [typing-extensions](https://github.com/python/typing_extensions) | 4.16.0 | PSF-2.0 |
-| [typing-inspection](https://github.com/pydantic/typing-inspection) | 0.4.2 | MIT |
+| [typing-inspection](https://github.com/pydantic/typing-inspection) | 0.4.5 | MIT |
 | [urllib3](https://pypi.org/project/urllib3/) | 2.8.0 | MIT |
 | [uvicorn](https://www.uvicorn.org/) | 0.27.0 | BSD License |
 | [uvloop](https://pypi.org/project/uvloop/) | 0.22.1 | MIT License |
@@ -192,7 +192,7 @@ universal, so it includes a few packages that install only on some platforms.
 | [@azure/msal-common](https://www.npmjs.com/package/@azure/msal-common) | 14.16.1 | MIT |
 | [@fontsource/inter](https://www.npmjs.com/package/@fontsource/inter) | 5.3.0 | OFL-1.1 |
 | [@fontsource/jetbrains-mono](https://www.npmjs.com/package/@fontsource/jetbrains-mono) | 5.3.0 | OFL-1.1 |
-| [@fontsource/source-serif-4](https://www.npmjs.com/package/@fontsource/source-serif-4) | 5.3.0 | OFL-1.1 |
+| [@fontsource/source-serif-4](https://www.npmjs.com/package/@fontsource/source-serif-4) | 5.3.1 | OFL-1.1 |
 | [ansi-regex](https://www.npmjs.com/package/ansi-regex) | 5.0.1 | MIT |
 | [ansi-styles](https://www.npmjs.com/package/ansi-styles) | 4.3.0 | MIT |
 | [camelcase](https://www.npmjs.com/package/camelcase) | 5.3.1 | MIT |
@@ -232,7 +232,7 @@ universal, so it includes a few packages that install only on some platforms.
 | [y18n](https://www.npmjs.com/package/y18n) | 4.0.3 | ISC |
 | [yargs](https://www.npmjs.com/package/yargs) | 15.4.1 | MIT |
 | [yargs-parser](https://www.npmjs.com/package/yargs-parser) | 18.1.3 | ISC |
-| [zustand](https://www.npmjs.com/package/zustand) | 5.0.11 | MIT |
+| [zustand](https://www.npmjs.com/package/zustand) | 5.0.16 | MIT |
 
 ## System packages (Docker image)
 
