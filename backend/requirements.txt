@@ -68,8 +68,8 @@ aiofiles==23.2.1
 # 1.2.2 clears PYSEC-2026-2270
 python-dotenv==1.2.2
 # fastapi 0.139 requires pydantic>=2.9
-pydantic[email]==2.13.4
-pydantic-settings==2.14.2
+pydantic[email]==2.14.1
+pydantic-settings==2.16.1
 email-validator==2.3.0
 
 # Session/Token Management (production)
@@ -77,7 +77,7 @@ redis==8.1.0
 
 # Database
 sqlalchemy==2.0.28
-alembic==1.13.1
+alembic==1.20.1
 asyncpg==0.29.0
 psycopg2-binary==2.9.9
 aiosqlite==0.20.0
