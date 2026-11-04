@@ -175,7 +175,7 @@ export const api = {
     try {
       response = await fetch(url, { ...fetchOptions, headers, credentials: 'include', signal: guard.signal });
     } catch (error) {
-      if (guard.didTimeOut()) throw new Error('The request timed out. Please try again.');
+      if (guard.didTimeOut()) throw new Error('The request timed out. Please try again.', { cause: error });
       throw error;
     } finally {
       guard.cleanup();
@@ -278,7 +278,7 @@ export const api = {
     try {
       response = await fetch(url, { ...fetchOptions, headers, credentials: 'include', signal: guard.signal });
     } catch (error) {
-      if (guard.didTimeOut()) throw new Error('The request timed out. Please try again.');
+      if (guard.didTimeOut()) throw new Error('The request timed out. Please try again.', { cause: error });
       throw error;
     } finally {
       guard.cleanup();
