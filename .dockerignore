@@ -59,3 +59,6 @@ backups/
 
 # Screenshots are README assets, not part of the image
 docs/screenshots/
+
+# Local case material (do not include in images)
+CFS2303678 EDG Analysis.pdf
