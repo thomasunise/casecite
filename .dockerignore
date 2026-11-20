@@ -1,61 +1,37 @@
-# Git
-.git
-.gitignore
-.gitattributes
+# Include any files or directories that you don't want to be copied to your
+# container here (e.g., local build artifacts, temporary files, etc.).
+#
+# For more help, visit the .dockerignore file reference guide at
+# https://docs.docker.com/go/build-context-dockerignore/
 
-# Environment files (NEVER include in image) — any depth
-**/.env
-**/.env.*
-**/*.env
-
-# IDE
-.vscode
-.idea
-**/*.swp
-**/*.swo
-
-# Python — any depth
+**/.DS_Store
 **/__pycache__
-**/*.pyc
-**/*.pyo
-**/.pytest_cache
-**/.mypy_cache
-**/.ruff_cache
-**/htmlcov
-**/.coverage
-
-# Node — any depth (frontend/node_modules must never enter the build context)
+**/.venv
+**/.classpath
+**/.dockerignore
+**/.env
+**/.git
+**/.gitignore
+**/.project
+**/.settings
+**/.toolstarget
+**/.vs
+**/.vscode
+**/*.*proj.user
+**/*.dbmdl
+**/*.jfm
+**/bin
+**/charts
+**/docker-compose*
+**/compose.y*ml
+**/Dockerfile*
 **/node_modules
+**/npm-debug.log
+**/obj
+**/secrets.dev.yaml
+**/values.dev.yaml
+LICENSE
+README.md
 
-# Data directories (mounted as volumes; root-level dir by design)
-**/data/
-**/*.db
-
-# Documentation (NOTICE.md and LICENSE ship in the image: the licence terms
-# and third-party notices must travel with a distributed copy)
-**/*.md
-!NOTICE.md
-
-# CI/CD
-.github
-.gitlab-ci.yml
-
-# Docker
-docker-compose*.yml
-Dockerfile.*
-
-# Backups (database dumps and data archives; never part of a build context)
-backups/
-**/*.sql
-**/*.sql.gz*
-**/*.tar.gz*
-**/*.enc
-
-# Secrets — any depth
-**/*.pem
-**/*.key
-**/*.crt
-**/credentials.json
-
-# Screenshots are README assets, not part of the image
-docs/screenshots/
+# Local case material (do not include in images)
+CFS2303678 EDG Analysis.pdf

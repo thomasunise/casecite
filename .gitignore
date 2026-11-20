@@ -70,3 +70,6 @@ frontend/coverage/
 
 # Claude Code local settings
 .claude/
+
+# Local case material (do not commit)
+CFS2303678 EDG Analysis.pdf
